@@ -1,0 +1,16 @@
+node_modules
+dist
+out
+release
+.DS_Store
+Thumbs.db
+.eslintcache
+*.log
+.env
+.env.*
+!.env.example
+coverage
+# Runtime data (per-workspace memory/prompts) and the harness-generated
+# opencode.json (absolute machine paths, rewritten on every boot).
+.albert/
+opencode.json
