@@ -1,0 +1,65 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-windows:
+    name: Windows installer
+    runs-on: windows-latest
+    permissions:
+      contents: write   # needed to create/upload releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron-builder needs this on Windows for native rebuilds
+      - name: Install windows-build-tools deps
+        run: npm install --global node-gyp
+
+      - name: Build Vite + Electron bundle
+        run: npm run build
+
+      - name: Package Windows installer (NSIS .exe)
+        run: npm run build:win
+        env:
+          # Disable code-signing in CI (no cert configured)
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
+
+      # Upload .exe as a workflow artifact so every run is downloadable
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alfred-windows-installer
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # On push to main only: cut a GitHub Release and attach the installer
+      - name: Create / update GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Alfred build #${{ github.run_number }}"
+          body: |
+            Automated build from commit ${{ github.sha }}.
+
+            **Download** the `alfred-*-setup.exe` below and run it to install.
+          files: dist/*.exe
+          draft: false
+          prerelease: false
