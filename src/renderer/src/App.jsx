@@ -1,14 +1,17 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Brain, Check, ChevronDown, Copy, FileSearch, FileText, Folder, GitBranch, Globe, List, ListTodo, MessagesSquare, Monitor, Music, Paperclip, Pencil, Pin, Play, Plus, Search, Settings as SettingsIcon, Square, SquareTerminal, Trash2, Wrench, X } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, Copy, FileText, Folder, GitBranch, MessagesSquare, Monitor, Music, Paperclip, Pencil, Pin, Play, Plus, Search, Settings as SettingsIcon, Square, SquareTerminal, Trash2, X } from 'lucide-react'
 import Navbar, { HeroChrome } from './components/Navbar'
 import AttachPicker from './components/AttachPicker'
 import PreviewPane from './components/PreviewPane'
 import Settings from './components/Settings'
 import Dropdown from './components/Dropdown'
 import Markdown from './components/Markdown'
+import LoadingState from './components/LoadingState'
+import ToolChips from './components/ToolChips'
+import ApprovalCard from './components/ApprovalCard'
+import { useUpdater } from './updates/useUpdater'
 import { useOpencode, modelKey, FAST_MODELS } from './opencode/useOpencode'
 import { useTheme } from './theme/ThemeContext'
-import { GSPIN_ROW_TINTS } from './theme/tokens'
 
 const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'webm']
 const audioExtOf = (name = '') => String(name.split('.').pop() || '').toLowerCase()
@@ -105,16 +108,6 @@ const WS_COLORS = {
 const timeNow = () =>
   new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
-function Spinner() {
-  return (
-    <span className="loader-row" aria-label="working">
-      {GSPIN_ROW_TINTS.map((c, i) => (
-        <span key={i} className="spinner-cell" style={{ background: c, animationDelay: `${-i * 0.15}s` }} />
-      ))}
-    </span>
-  )
-}
-
 const TOOL_ACTION = {
   read: 'read', task: 'read',
   write: 'write', edit: 'write',
@@ -124,136 +117,11 @@ const TOOL_ACTION = {
   question: 'ask',
   webfetch: 'web', websearch: 'web'
 }
-const ACTION_META = {
-  read: { Icon: FileSearch, label: 'READ' },
-  write: { Icon: Pencil, label: 'WRITE' },
-  list: { Icon: List, label: 'LIST' },
-  cmd: { Icon: SquareTerminal, label: 'CMD' },
-  todo: { Icon: ListTodo, label: 'TODO' },
-  ask: { Icon: MessagesSquare, label: 'ASK' },
-  web: { Icon: Globe, label: 'WEB' },
-  memory: { Icon: Brain, label: 'MEMORY' },
-  search: { Icon: Search, label: 'SEARCH' },
-  other: { Icon: Wrench, label: 'TOOL' }
-}
 // Our MCP servers arrive namespaced (server_tool): give them their own badges.
 const mcpAction = (toolName) => {
   if (toolName.startsWith('albert-student-memory_')) return 'memory'
   if (toolName.startsWith('albert-course-search_')) return 'search'
   return null
-}
-
-function ToolRow({ label, done, status, tool, action, input, output }) {
-  const [open, setOpen] = useState(false)
-  const hasDetail = !!(tool || status || input || output)
-  const meta = ACTION_META[action] || null
-  return (
-    <div className="tool-wrap">
-      <div className={`tool-row${done ? ' done' : ''}`} onClick={() => (hasDetail ? setOpen((o) => !o) : undefined)} title={hasDetail ? 'Toggle details' : label}>
-        <span className={`chev ${open ? 'down' : ''}`}>›</span>
-        {meta && (
-          <span className={`tool-badge ${action}`}>
-            <meta.Icon size={11} />{meta.label}
-          </span>
-        )}
-        <span className="tool-label">{label}</span>
-        {!done && <span className="tool-live">running</span>}
-      </div>
-      {open && hasDetail && (
-        <div className="tool-detail">
-          {tool && (
-            <div className="td-row"><span>Tool</span><code>{tool}</code></div>
-          )}
-          {status && (
-            <div className="td-row"><span>Status</span><code>{status}</code></div>
-          )}
-          {input ? (
-            <div className="td-block"><span>Input</span><pre>{input}</pre></div>
-          ) : null}
-          {output ? (
-            <div className="td-block"><span>Output</span><pre>{output}</pre></div>
-          ) : null}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function QuestionCard({ tool, requestID, onAnswer }) {
-  const qs = Array.isArray(tool.questions) ? tool.questions : []
-  const [sel, setSel] = useState({}) // qIndex -> array of labels
-  const [sent, setSent] = useState(null) // summary after answering
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  if (!qs.length) return null
-  const toggle = (qi, label) => {
-    if (sent || busy) return
-    setSel((prev) => {
-      const cur = prev[qi] || []
-      return { ...prev, [qi]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label] }
-    })
-  }
-  const submit = async () => {
-    if (sent || busy || !requestID) return
-    setBusy(true)
-    setErr('')
-    try {
-      const answers = qs.map((q, i) => sel[i] || [])
-      await onAnswer(answers)
-      const flat = answers.flat()
-      setSent(flat.length ? flat.join(', ') : 'answered')
-    } catch (e) {
-      const msg = e.message || String(e)
-      if (/not found|gone|expired|no question|404/i.test(msg)) setSent('request expired')
-      else setErr(msg.slice(0, 200))
-    } finally {
-      setBusy(false)
-    }
-  }
-  if (tool.done && !sent) {
-    return (
-      <div className="q-card">
-        <div className="q-answered">Answered ✓</div>
-      </div>
-    )
-  }
-  return (
-    <div className="q-card">
-      {qs.map((q, qi) => {
-        const opts = Array.isArray(q.options) ? q.options : []
-        return (
-          <div key={qi} className="q-block">
-            {q.header && <div className="q-header">{q.header}</div>}
-            {q.question && <div className="q-text">{q.question}</div>}
-            <div className="q-opts">
-              {opts.map((o) => {
-                const label = typeof o === 'string' ? o : o.label || ''
-                const desc = typeof o === 'string' ? '' : o.description || ''
-                const on = (sel[qi] || []).includes(label)
-                return (
-                  <button key={label} className={`q-opt${on ? ' on' : ''}`} disabled={!!sent || busy} onClick={() => toggle(qi, label)} title={desc}>
-                    <span className="q-opt-label">{label}</span>
-                    {desc && <span className="q-opt-desc">{desc}</span>}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )
-      })}
-      {sent ? (
-        <div className="q-answered">Answered: {sent}</div>
-      ) : (
-        <>
-          {!requestID && <div className="q-answered">Waiting for request…</div>}
-          <button className="btn accent q-submit" disabled={busy || !requestID} onClick={submit}>
-            {busy ? 'Sending…' : 'Send answers'}
-          </button>
-          {err && <div className="q-err">{err}</div>}
-        </>
-      )}
-    </div>
-  )
 }
 
 function Msg({ m, onPreview, live, onQuestion, qReq }) {
@@ -312,9 +180,9 @@ function Msg({ m, onPreview, live, onQuestion, qReq }) {
   const renderBlock = (b, i) => {
     if (b.kind !== 'tool') return <Markdown key={b.key || i} text={b.text} plain={live && i === lastTextIdx} />
     if (b.tool === 'question' && Array.isArray(b.questions) && b.questions.length) {
-      return <QuestionCard key={b.callID || b.key || i} tool={b} requestID={qReq[b.callID]} onAnswer={(answers) => onQuestion(qReq[b.callID], answers)} />
+      return <ApprovalCard key={b.callID || b.key || i} tool={b} requestID={qReq[b.callID]} onAnswer={(answers) => onQuestion(qReq[b.callID], answers)} />
     }
-    return <ToolRow key={b.key || i} label={b.label} done={b.done} status={b.status} tool={b.tool} action={b.action} input={b.input} output={b.output} />
+    return <ToolChips key={b.key || i} label={b.label} done={b.done} status={b.status} tool={b.tool} action={b.action} input={b.input} output={b.output} />
   }
   return (
     <div className="msg-ai" id={m.id ? `msg-${m.id}` : undefined}>
@@ -458,7 +326,7 @@ function PromptRail({ messages }) {
 }
 
 export default function App() {
-  const { theme, appearance, enterToSend } = useTheme()
+  const { theme, appearance, enterToSend, loaderVariant } = useTheme()
   const loadJSON = (k, fb) => {
     try {
       const v = JSON.parse(localStorage.getItem(k))
@@ -494,6 +362,13 @@ export default function App() {
     const v = localStorage.getItem('albert.view') || 'study'
     return v === 'explain' || v === 'graph' ? 'study' : v // removed tabs fall back to study
   })
+  const [settingsTab, setSettingsTab] = useState('general')
+  const upd = useUpdater()
+  const updActive = upd.supported && ['available', 'downloading', 'downloaded'].includes(upd.status)
+  const openUpdates = () => {
+    setSettingsTab('updates')
+    setView('settings')
+  }
   const [store, setStore] = useState(() => loadJSON('albert.msgs', {}))
   const [input, setInput] = useState('')
   const [workingIds, setWorkingIds] = useState({}) // local session id -> true while its turn runs
@@ -1704,14 +1579,35 @@ export default function App() {
               )}
               </div>
               <div className="side-foot">
+              {updActive && (
+                <button
+                  className={`upd-banner ${upd.status}`}
+                  onClick={openUpdates}
+                  title={upd.status === 'downloaded' ? 'Open Updates to restart and install' : `Update available${upd.latest ? ` (v${upd.latest})` : ''} — open Updates`}
+                >
+                  <span className="upd-dot" />
+                  <span className="upd-text">
+                    {upd.status === 'downloaded'
+                      ? 'Restart to update'
+                      : upd.status === 'downloading'
+                        ? 'Downloading update'
+                        : `Update available${upd.latest ? ` · v${upd.latest}` : ''}`}
+                  </span>
+                  {upd.status === 'downloading' && <span className="upd-pct">{upd.progress}%</span>}
+                </button>
+              )}
+              <div className="side-foot-row">
               <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{appearance} · {theme.isGlass ? 'glass' : 'opaque'}</span>
-              <button className={`icon-btn ${view === 'settings' ? 'on' : ''}`} onClick={() => setView('settings')} title="Settings"><SettingsIcon size={14} /></button>
+              <button className={`icon-btn ${view === 'settings' ? 'on' : ''}`} onClick={() => { setSettingsTab('general'); setView('settings') }} title="Settings"><SettingsIcon size={14} /></button>
+              </div>
             </div>
           </aside>
         )}
         <div className="main">
           {view === 'settings' ? (
             <Settings
+              tab={settingsTab}
+              onTabChange={setSettingsTab}
               modes={modeCfg.modes}
               activeMode={modeCfg.activeMode}
               onActivateMode={setModeId}
@@ -1785,7 +1681,7 @@ export default function App() {
                     })}
                     {working && (
                       <div className="msg-ai">
-                        <Spinner /> <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>thinking…</span>
+                        <LoadingState variant={loaderVariant} label="Thinking" />
                       </div>
                     )}
                   </div>

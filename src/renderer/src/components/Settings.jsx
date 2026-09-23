@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import Dropdown from './Dropdown'
+import LoadingState, { LOADER_VARIANTS } from './LoadingState'
+import { useUpdater } from '../updates/useUpdater'
 import { useTheme } from '../theme/ThemeContext'
 import { ACCENTS } from '../theme/tokens'
 
@@ -199,13 +201,16 @@ function ModesTab({ modes, activeMode, onActivateMode, onSaveCustomMode, onDelet
   )
 }
 
-export default function Settings({ modes = [], activeMode = 'study', onActivateMode, onSaveCustomMode, onDeleteCustomMode, onModesChanged }) {
+export default function Settings({ tab: controlledTab, onTabChange, modes = [], activeMode = 'study', onActivateMode, onSaveCustomMode, onDeleteCustomMode, onModesChanged }) {
   const t = useTheme()
+  const upd = useUpdater()
   const variantOptions = Object.values(t.variants).filter((v) => v.appearance === 'light')
   const darkOptions = Object.values(t.variants).filter((v) => v.appearance === 'dark')
   const [bgWarn, setBgWarn] = useState('')
   const fileRef = useRef(null)
-  const [tab, setTab] = useState('general')
+  const [innerTab, setInnerTab] = useState('general')
+  const tab = controlledTab ?? innerTab
+  const setTab = onTabChange ?? setInnerTab
   const [prompts, setPrompts] = useState(null) // { soul, system, defaultSoul, defaultSystem, customSoul, customSystem }
   const [soulEdit, setSoulEdit] = useState('')
   const [systemEdit, setSystemEdit] = useState('')
@@ -304,7 +309,7 @@ export default function Settings({ modes = [], activeMode = 'study', onActivateM
         <Segmented
           value={tab}
           onChange={setTab}
-          options={[{ value: 'general', label: 'General' }, { value: 'soul', label: 'Soul' }, { value: 'system', label: 'System' }, { value: 'modes', label: 'Modes' }]}
+          options={[{ value: 'general', label: 'General' }, { value: 'soul', label: 'Soul' }, { value: 'system', label: 'System' }, { value: 'modes', label: 'Modes' }, { value: 'updates', label: 'Updates' }]}
         />
       </div>
 
@@ -405,6 +410,20 @@ export default function Settings({ modes = [], activeMode = 'study', onActivateM
       </section>
 
       <section className="set-card">
+        <h2>Thinking indicator</h2>
+        <Row label="Style" hint="Pixel-grid animation shown while the tutor thinks.">
+          <Segmented
+            value={t.loaderVariant}
+            onChange={t.setLoaderVariant}
+            options={LOADER_VARIANTS.map((v) => ({ value: v, label: v }))}
+          />
+        </Row>
+        <Row label="Preview" hint="Live — the timer ticks like in chat.">
+          <LoadingState key={t.loaderVariant} variant={t.loaderVariant} label="Thinking" />
+        </Row>
+      </section>
+
+      <section className="set-card">
         <h2>Composer</h2>
         <Row label="Enter to send" hint="Off: Enter inserts a newline, Ctrl+Enter sends.">
           <Switch value={t.enterToSend} onChange={t.setEnterToSend} />
@@ -413,7 +432,7 @@ export default function Settings({ modes = [], activeMode = 'study', onActivateM
 
       <section className="set-card">
         <h2>About</h2>
-        <Row label="Alfred" hint="Student helper · Electron + React + Vite · Zeron glass theme."><span className="ver">0.1.0</span></Row>
+        <Row label="Alfred" hint="Student helper · Electron + React + Vite · Zeron glass theme."><span className="ver">{upd.current || '0.1.0'}</span></Row>
       </section>
       </>
       )}
@@ -458,6 +477,52 @@ export default function Settings({ modes = [], activeMode = 'study', onActivateM
           status={promptStatus}
           setStatus={setPromptStatus}
         />
+      )}
+
+      {tab === 'updates' && (
+      <section className="set-card">
+        <h2>Updates</h2>
+        {!upd.supported ? (
+          <p className="prompt-hint">Automatic updates run in the installed app. This dev build never checks — grab installers from the GitHub releases page.</p>
+        ) : (
+          <p className="prompt-hint">New versions are detected from GitHub Releases, downloaded in the background, and installed on restart.</p>
+        )}
+        <Row label="App version" hint="Currently running.">
+          <span className="ver">{upd.current || '…'}</span>
+        </Row>
+        <Row label="Latest version" hint={upd.latest ? 'Published on GitHub.' : 'Checked against GitHub Releases.'}>
+          <span className="ver">{upd.latest ? `v${upd.latest}` : '—'}</span>
+        </Row>
+        {upd.status === 'downloading' && (
+          <div className="upd-bar"><i style={{ width: `${upd.progress}%` }} /></div>
+        )}
+        {upd.error && <div className="upd-err">{upd.error}</div>}
+        {upd.status === 'downloaded' ? (
+          <div className="prompt-actions">
+            <button className="btn accent" onClick={upd.install}>Restart to update{upd.latest ? ` to v${upd.latest}` : ''}</button>
+          </div>
+        ) : (
+          <div className="prompt-actions">
+            <button
+              className="btn accent"
+              onClick={upd.check}
+              disabled={!upd.supported || upd.status === 'checking' || upd.status === 'downloading'}
+            >
+              {upd.status === 'checking' ? 'Checking…' : upd.status === 'downloading' ? `Downloading… ${upd.progress}%` : 'Check for updates'}
+            </button>
+            {upd.releasesUrl && (
+              <button className="btn ghost" onClick={() => window.open(upd.releasesUrl, '_blank')}>View releases</button>
+            )}
+            {upd.status === 'uptodate' && <span className="prompt-status">You&apos;re up to date.</span>}
+          </div>
+        )}
+        {upd.notes && (
+          <details className="upd-notes">
+            <summary>What&apos;s new{upd.latest ? ` in v${upd.latest}` : ''}</summary>
+            <pre>{upd.notes}</pre>
+          </details>
+        )}
+      </section>
       )}
     </div>
   )

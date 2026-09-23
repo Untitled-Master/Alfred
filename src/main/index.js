@@ -3,10 +3,14 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { OpencodeManager } from './opencode.js'
+import { AppUpdater } from './updater.js'
 
 let mainWindow = null
 const oc = new OpencodeManager((payload) => {
   mainWindow?.webContents.send('oc:event', payload)
+})
+const updater = new AppUpdater((payload) => {
+  mainWindow?.webContents.send('upd:event', payload)
 })
 
 function createWindow() {
@@ -174,10 +178,18 @@ app.whenReady().then(() => {
     return oc.replyQuestion(requestID, answers)
   })
 
+  // In-app updates (GitHub Releases)
+  ipcMain.handle('upd:state', () => updater.state())
+  ipcMain.handle('upd:check', () => updater.check())
+  ipcMain.handle('upd:install', () => updater.install())
+
   createWindow()
 
   // Boot the tutor backend in the background; the UI works offline until ready.
   oc.start().catch((e) => console.error('opencode harness failed to start:', e.message))
+
+  // Update feed (packaged builds only; silent no-op in dev).
+  updater.init().catch((e) => console.error('updater failed to start:', e.message))
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

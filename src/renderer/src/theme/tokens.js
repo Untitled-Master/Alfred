@@ -179,8 +179,6 @@ export const THEMES = {
   }
 }
 
-export const GSPIN_ROW_TINTS = ['#B6D3EF', '#EDB185', '#F888A0']
-
 export function resolveTheme(variantId, { accent = 'themeDefault', surface = 'themeDefault' } = {}) {
   const base = THEMES[variantId] || THEMES['zeron-dark']
   const effective = surface === 'themeDefault' ? base.treatment : surface
