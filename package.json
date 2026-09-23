@@ -12,6 +12,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
+    "test": "node --test test/*.test.js",
     "start": "electron-vite preview",
     "dev": "cross-env OPENCODE_SERVER_PASSWORD=albert-dev ALBERT_SERVER_URL=http://127.0.0.1:4123 ALBERT_SERVER_PASSWORD=albert-dev concurrently -k -n app,server \"electron-vite dev\" \"opencode serve --port 4123 --hostname 127.0.0.1\"",
     "dev:app": "electron-vite dev",

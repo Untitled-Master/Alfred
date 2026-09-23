@@ -59,7 +59,12 @@ mcp/student-memory/         per-topic mastery server (stdio)
 Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml)
 (runs on `windows-latest`, verified green).
 
-- **Triggers:** every `push` to `main` and every PR targeting `main`.
+- **Triggers:** `push` to `main` only — no PR builds. PRs run
+  [`.github/workflows/pr.yml`](.github/workflows/pr.yml) instead
+  (`npm ci` + `npm test`, no packaging).
+- **PR checks:** `npm test` runs the `node --test` smoke suite in `test/`
+  (semver, updater wiring, update-feed config, CI split). Keep it green and
+  dependency-free (it runs with `npm ci --ignore-scripts`).
 - **Steps:** checkout → Node 20 (`npm ci`, npm cache) → install `node-gyp`
   globally (native rebuilds) → `npm run build` → `npm run build:win`
   (electron-builder, NSIS) with `CSC_LINK: ''` / `CSC_KEY_PASSWORD: ''`
