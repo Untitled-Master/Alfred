@@ -34,7 +34,7 @@ jobs:
         run: npm run build
 
       - name: Package Windows installer (NSIS .exe)
-        run: npm run build:win
+        run: npm run build:win -- --publish never
         env:
           # Disable code-signing in CI (no cert configured)
           CSC_LINK: ''
