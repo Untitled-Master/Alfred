@@ -24,6 +24,7 @@ export function ThemeProvider({ children }) {
   const [bg, setBg] = useState(() => localStorage.getItem('albert.bgImage') || '')
   const [bgOpacity, setBgOpacity] = useState(() => Number(localStorage.getItem('albert.bgOpacity') ?? 20))
   const [bgFade, setBgFade] = useState(() => localStorage.getItem('albert.bgFade') !== '0')
+  const [loaderVariant, setLoaderVariant] = useState(() => localStorage.getItem('albert.loaderVariant') || 'Drive')
   const [sys, setSys] = useState(systemAppearance())
 
   useEffect(() => {
@@ -90,8 +91,9 @@ export function ThemeProvider({ children }) {
     localStorage.setItem('albert.bgImage', bg)
     localStorage.setItem('albert.bgOpacity', String(bgOpacity))
     localStorage.setItem('albert.bgFade', bgFade ? '1' : '0')
-  }, [theme, mode, lightId, darkId, accent, surface, chatFontSize, codeFontSize, reduceMotion, enterToSend, bg, bgOpacity, bgFade])
+    localStorage.setItem('albert.loaderVariant', loaderVariant)
+  }, [theme, mode, lightId, darkId, accent, surface, chatFontSize, codeFontSize, reduceMotion, enterToSend, bg, bgOpacity, bgFade, loaderVariant])
 
-  const value = { theme, appearance, mode, setMode, lightId, setLightId, darkId, setDarkId, accent, setAccent, surface, setSurface, chatFontSize, setChatFontSize, codeFontSize, setCodeFontSize, reduceMotion, setReduceMotion, enterToSend, setEnterToSend, bg, setBg, bgOpacity, setBgOpacity, bgFade, setBgFade, variants: THEMES }
+  const value = { theme, appearance, mode, setMode, lightId, setLightId, darkId, setDarkId, accent, setAccent, surface, setSurface, chatFontSize, setChatFontSize, codeFontSize, setCodeFontSize, reduceMotion, setReduceMotion, enterToSend, setEnterToSend, bg, setBg, bgOpacity, setBgOpacity, bgFade, setBgFade, loaderVariant, setLoaderVariant, variants: THEMES }
   return <ThemeCtx.Provider value={value}>{children}</ThemeCtx.Provider>
 }

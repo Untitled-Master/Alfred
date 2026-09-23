@@ -10,6 +10,16 @@ const api = {
     ping: () => ipcRenderer.send('ping')
   },
   platform: process.platform,
+  updates: {
+    state: () => ipcRenderer.invoke('upd:state'),
+    check: () => ipcRenderer.invoke('upd:check'),
+    install: () => ipcRenderer.invoke('upd:install'),
+    onEvent: (cb) => {
+      const listener = (_e, payload) => cb(payload)
+      ipcRenderer.on('upd:event', listener)
+      return () => ipcRenderer.removeListener('upd:event', listener)
+    }
+  },
   opencode: {
     status: () => ipcRenderer.invoke('oc:status'),
     models: () => ipcRenderer.invoke('oc:models'),

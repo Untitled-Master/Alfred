@@ -49,6 +49,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Publish the electron-updater feed (latest.yml) for in-app updates.
+      # Only when package.json was bumped to a version with no v<version>
+      # release yet — regular merges reuse the existing feed and skip this.
+      - name: Publish update feed (new app version only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ''
+          CSC_KEY_PASSWORD: ''
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://api.github.com/repos/${{ github.repository }}/releases/tags/v$VER")
+          if [ "$CODE" = "200" ]; then
+            echo "v$VER already released — skipping update feed"
+          else
+            npx electron-builder --win --publish always
+          fi
+
       # On push to main only: cut a GitHub Release and attach the installer
       - name: Create / update GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

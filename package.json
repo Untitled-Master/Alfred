@@ -5,6 +5,10 @@
   "main": "./out/main/index.js",
   "author": "example.com",
   "homepage": "https://electron-vite.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Untitled-Master/Alfred.git"
+  },
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -24,6 +28,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "cytoscape": "^3.34.3",
+    "electron-updater": "^6.7.3",
     "function-plot": "^1.25.4",
     "lucide-react": "^1.47.0",
     "mermaid": "^12.0.0",

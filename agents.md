@@ -22,11 +22,12 @@ Prereqs: Node 20+, `opencode` CLI on `PATH`, one logged-in provider
 
 ```text
 src/main/opencode.js        opencode serve harness, prompt_async, memory, prompts/modes, MCP config
-src/main/index.js           window + IPC handlers (oc:*, window controls)
+src/main/index.js           window + IPC handlers (oc:*, upd:*, window controls)
+src/main/updater.js         GitHub-Releases auto-update feed (electron-updater)
 src/preload/index.js        window.api bridge (context-isolated)
 src/renderer/src/App.jsx    shell, sessions, transcript, composer, sidebar
 src/renderer/src/components Markdown, MermaidBlock, Dropdown, AttachPicker,
-                            PreviewPane, Settings (General/Soul/System/Modes), Navbar
+                            PreviewPane, Settings (General/Soul/System/Modes/Updates), Navbar
 src/renderer/src/opencode/  useOpencode hook (models, variants, commands, SSE state)
 src/renderer/src/theme/     tokens + ThemeContext + glass.css
 mcp/course-search/          workspace PDF search server (stdio)
@@ -72,6 +73,15 @@ Workflow: [`.github/workflows/build.yml`](.github/workflows/build.yml)
   `build-N`. PR runs upload the artifact but cut **no** release.
 - **To ship:** merge a PR (or push) to `main`, wait ~5 min, grab the `.exe`
   from the run's artifact immediately or from the `build-N` release.
+- **To ship an update (in-app):** bump `version` in `package.json`, merge to
+  `main`. The workflow publishes an electron-updater feed (`latest.yml`) to a
+  `v<version>` release; installed apps detect it from GitHub Releases, show an
+  update banner in the sidebar, and install on restart (Settings → Updates).
+  Merges without a version bump reuse the existing feed and publish nothing.
+- **Updater wiring:** `src/main/updater.js` (`AppUpdater`, `upd:*` IPC) →
+  `window.api.updates` → `src/renderer/src/updates/useUpdater.js` →
+  sidebar banner + Settings → Updates tab. Dev builds report
+  `supported:false` and never check.
 - **To sign later:** add the cert as repo secrets and wire
   `CSC_LINK`/`CSC_KEY_PASSWORD` to them in the `build:win` step env.
 
