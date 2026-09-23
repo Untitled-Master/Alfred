@@ -36,6 +36,13 @@ describe('update-feed packaging config', () => {
     assert.match(yml, /owner:\s*Untitled-Master/)
     assert.match(yml, /repo:\s*Alfred/)
   })
+
+  it('packaging scripts never publish (only the CI feed step does)', () => {
+    for (const name of ['build:unpack', 'build:win', 'build:mac', 'build:linux']) {
+      const script = pkg.scripts?.[name] || ''
+      assert.ok(script.includes('--publish never'), `${name} must pass --publish never`)
+    }
+  })
 })
 
 describe('main-process updater wiring', () => {
