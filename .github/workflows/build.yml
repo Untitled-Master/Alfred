@@ -1,9 +1,9 @@
 name: Build
 
+# Windows installer is built on merge to main only.
+# PRs run the fast checks in pr.yml (no packaging).
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 jobs:
