@@ -152,7 +152,7 @@ function ModesTab({ modes, activeMode, onActivateMode, onSaveCustomMode, onDelet
     <>
       <section className="set-card">
         <h2>Modes</h2>
-        <p className="prompt-hint">A mode is a soul + system prompt pack. The Soul/System tabs edit whichever mode is active. Switch here, or in chat with <code>/mode &lt;id&gt;</code>.</p>
+        <p className="prompt-hint">A mode is a soul + system prompt pack. The Soul/System tabs edit whichever mode is active. Switch here, or in chat with <code>/mode</code>.</p>
         {modes.length ? (
           <div className="mode-list">
             {modes.map((m) => (
@@ -201,7 +201,7 @@ function ModesTab({ modes, activeMode, onActivateMode, onSaveCustomMode, onDelet
   )
 }
 
-export default function Settings({ tab: controlledTab, onTabChange, modes = [], activeMode = 'study', onActivateMode, onSaveCustomMode, onDeleteCustomMode, onModesChanged }) {
+export default function Settings({ tab: controlledTab, onTabChange, modes = [], activeMode = 'opencode', onActivateMode, onSaveCustomMode, onDeleteCustomMode, onModesChanged }) {
   const t = useTheme()
   const upd = useUpdater()
   const variantOptions = Object.values(t.variants).filter((v) => v.appearance === 'light')

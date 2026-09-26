@@ -88,14 +88,53 @@ app.whenReady().then(() => {
     needOc()
     return oc.models()
   })
-  ipcMain.handle('oc:session-create', async (_e, title) => {
+  ipcMain.handle('oc:session-create', async (_e, opts) => {
     needOc()
-    return oc.createSession(title)
+    return oc.createSession(opts || {})
   })
-  ipcMain.handle('oc:prompt', async (_e, sessionID, model, text, attachments, variant, textOnly) => {
+  ipcMain.handle('oc:sessions', async (_e, query) => {
     needOc()
-    return oc.prompt(sessionID, { providerID: model.providerID, modelID: model.modelID, text, attachments: attachments || [], variant: variant || '', textOnly: !!textOnly })
+    return oc.listSessions(query || {})
   })
+  ipcMain.handle('oc:projects', async () => {
+    needOc()
+    return oc.listProjects()
+  })
+  ipcMain.handle('oc:agents', async () => {
+    needOc()
+    return oc.listAgents()
+  })
+  ipcMain.handle('oc:fork', async (_e, sessionID, messageID) => {
+    needOc()
+    return oc.forkSession(sessionID, messageID)
+  })
+  ipcMain.handle('oc:children', async (_e, sessionID) => {
+    needOc()
+    return oc.getChildren(sessionID)
+  })
+  ipcMain.handle('oc:todos', async (_e, sessionID) => {
+    needOc()
+    return oc.getSessionTodos(sessionID)
+  })
+  ipcMain.handle('oc:session-title', async (_e, sessionID, title) => {
+    needOc()
+    return oc.updateSessionTitle(sessionID, title)
+  })
+  ipcMain.handle(
+    'oc:prompt',
+    async (_e, sessionID, model, text, attachments, variant, textOnly, agent) => {
+      needOc()
+      return oc.prompt(sessionID, {
+        providerID: model.providerID,
+        modelID: model.modelID,
+        agent: agent || '',
+        text,
+        attachments: attachments || [],
+        variant: variant || '',
+        textOnly: !!textOnly
+      })
+    }
+  )
   ipcMain.handle('oc:commands', async () => {
     needOc()
     return oc.commands()
@@ -108,9 +147,9 @@ app.whenReady().then(() => {
     needOc()
     return oc.abort(sessionID)
   })
-  ipcMain.handle('oc:messages', async (_e, sessionID) => {
+  ipcMain.handle('oc:messages', async (_e, sessionID, query) => {
     needOc()
-    return oc.messages(sessionID)
+    return oc.getMessages(sessionID, query || {})
   })
   ipcMain.handle('oc:session-get', async (_e, sessionID) => {
     needOc()
@@ -119,10 +158,6 @@ app.whenReady().then(() => {
   ipcMain.handle('oc:session-delete', async (_e, sessionID) => {
     needOc()
     return oc.deleteSession(sessionID)
-  })
-  ipcMain.handle('oc:title', async (_e, conversation, model) => {
-    needOc()
-    return oc.title(conversation, { providerID: model.providerID, modelID: model.modelID })
   })
   ipcMain.handle('oc:pick-folder', async () => {
     const win = BrowserWindow.getFocusedWindow()
@@ -144,6 +179,34 @@ app.whenReady().then(() => {
   ipcMain.handle('oc:read-workspace-file', async (_e, relPath) => {
     needOc()
     return oc.readWorkspaceFile(relPath)
+  })
+  ipcMain.handle('oc:git-info', async (_e, dir) => {
+    needOc()
+    return oc.gitInfo(dir || undefined)
+  })
+  ipcMain.handle('oc:git-diff', async (_e, relPath, staged, dir) => {
+    needOc()
+    return oc.gitDiff(relPath, !!staged, dir || undefined)
+  })
+  ipcMain.handle('oc:git-contributors', async (_e, dir) => {
+    needOc()
+    return oc.gitContributors(dir || undefined)
+  })
+  ipcMain.handle('oc:git-checkout', async (_e, branch, create, dir) => {
+    needOc()
+    return oc.gitCheckout(branch, !!create, dir || undefined)
+  })
+  ipcMain.handle('oc:git-commit-action', async (_e, opts, dir) => {
+    needOc()
+    const res = await oc.gitCommitAction(opts || {}, dir || undefined)
+    if (res?.prUrl) {
+      shell.openExternal(res.prUrl).catch(() => {})
+    }
+    return res
+  })
+  ipcMain.handle('oc:git-generate-commit', async (_e, dir) => {
+    needOc()
+    return oc.gitGenerateCommit(dir || undefined)
   })
   ipcMain.handle('oc:memory', async () => {
     needOc()

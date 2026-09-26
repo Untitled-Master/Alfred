@@ -10,6 +10,8 @@ Thumbs.db
 .env.*
 !.env.example
 coverage
+# Local copy of the Surfer loader meme (production streams it from Vercel Blob).
+src/renderer/public/subway-surfers.mp4
 # Runtime data (per-workspace memory/prompts) and the harness-generated
 # opencode.json (absolute machine paths, rewritten on every boot).
 .albert/

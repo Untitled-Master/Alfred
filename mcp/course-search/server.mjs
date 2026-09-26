@@ -1,19 +1,29 @@
 #!/usr/bin/env node
 // albert-course-search — MCP server (stdio) exposing workspace PDFs as
 // searchable chunks. No vector DB: BM25 over ~800-char overlapping chunks,
-// unicode-letter tokenization (French-friendly). Index cached to
-// ALBERT_DATA_DIR/course-index.json with mtime/size invalidation.
+// unicode-letter tokenization (French-friendly). Index cached per workspace
+// to <opencode-data-dir>/alfred/course-index-<hash>.json with mtime/size
+// invalidation — never a dot-dir inside the workspace.
 // IMPORTANT: never print to stdout (it carries JSON-RPC). Use stderr.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { promises as fs } from 'fs'
+import { createHash } from 'crypto'
+import os from 'os'
 import path from 'path'
 import { PDFParse } from 'pdf-parse'
 
+// Mirrors opencode's own data-dir layout (xdg-basedir): $XDG_DATA_HOME/opencode,
+// else ~/.local/share/opencode. Same tree that holds its session storage.
+const opencodeDataDir = () => {
+  const home = process.env.OPENCODE_TEST_HOME || os.homedir()
+  return path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode')
+}
 const COURSE_DIR = process.argv[2] || process.env.ALBERT_COURSE_DIR || process.cwd()
-const DATA_DIR = process.argv[3] || process.env.ALBERT_DATA_DIR || path.join(COURSE_DIR, '.albert')
-const INDEX_PATH = path.join(DATA_DIR, 'course-index.json')
+const DATA_DIR = process.argv[3] || process.env.ALBERT_DATA_DIR || path.join(opencodeDataDir(), 'alfred')
+// One shared cache dir across repos: key the index file by workspace path.
+const INDEX_PATH = path.join(DATA_DIR, `course-index-${createHash('sha1').update(path.resolve(COURSE_DIR)).digest('hex').slice(0, 16)}.json`)
 const SKIP_DIRS = new Set(['node_modules', '.git', 'out', 'dist', 'build', '.next', 'target', 'vendor', '.albert'])
 const MAX_FILES = 50
 const MAX_FILE_MB = 50
@@ -59,13 +69,38 @@ function sameFiles(a, b) {
   return ka.every((f) => b[f] && b[f].mtime === a[f].mtime && b[f].size === a[f].size)
 }
 
+// Drop cache files for workspaces that no longer exist (best effort).
+async function pruneStaleIndexes() {
+  let files
+  try {
+    files = await fs.readdir(DATA_DIR)
+  } catch {
+    return
+  }
+  for (const f of files) {
+    if (!/^course-index-[0-9a-f]{16}\.json$/.test(f) || path.join(DATA_DIR, f) === INDEX_PATH) continue
+    let stale = false
+    try {
+      const idx = JSON.parse(await fs.readFile(path.join(DATA_DIR, f), 'utf8'))
+      if (idx?.courseDir) await fs.stat(idx.courseDir)
+    } catch {
+      stale = true // corrupt or workspace gone
+    }
+    if (stale) {
+      try {
+        await fs.unlink(path.join(DATA_DIR, f))
+      } catch { /* keep */ }
+    }
+  }
+}
+
 async function loadIndex(force) {
   let cached = null
   try {
     cached = JSON.parse(await fs.readFile(INDEX_PATH, 'utf8'))
   } catch { /* cold */ }
   const meta = await currentMeta()
-  if (!force && cached && sameFiles(meta, cached.files)) return cached
+  if (!force && cached && cached.courseDir === path.resolve(COURSE_DIR) && sameFiles(meta, cached.files)) return cached
   const chunks = []
   for (const f of Object.keys(meta)) {
     let text = ''
@@ -88,10 +123,11 @@ async function loadIndex(force) {
       chunks.push({ doc, idx: chunks.length, text: slice })
     }
   }
-  const index = { builtAt: Date.now(), files: meta, chunks }
+  const index = { builtAt: Date.now(), courseDir: path.resolve(COURSE_DIR), files: meta, chunks }
   try {
     await fs.mkdir(DATA_DIR, { recursive: true })
     await fs.writeFile(INDEX_PATH, JSON.stringify(index))
+    pruneStaleIndexes().catch(() => {})
   } catch { /* cache optional */ }
   return index
 }
