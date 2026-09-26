@@ -57,7 +57,7 @@ npm run build:win   # packaged Windows installer (electron-builder)
 ## Project layout
 
 ```text
-src/main/opencode.js        opencode serve harness, prompt_async, memory, prompts, MCP config
+src/main/opencode.js        opencode serve harness, sessions/list/transcript API, modes-as-agents, memory, MCP config
 src/main/index.js           window + IPC (oc:*, window controls)
 src/preload/index.js        window.api bridge
 src/renderer/src/App.jsx    shell, sessions, transcript, composer, sidebar
@@ -71,7 +71,8 @@ mcp/student-memory/         per-topic mastery server
 
 ## Configuration
 
-- **Workspace** — picked in-app (hero or composer row); sessions are stamped per workspace.
-- **Runtime data** — `<workspace>/.albert/` (`memory.json`, `prompts.json`); local UI state lives in `localStorage`.
+- **Workspace** — picked in-app (hero or composer row); new sessions are created in it, but every repo's threads stay visible (one shared server store — the TUI sees them too).
+- **Sessions & transcripts** — server-side in opencode's data dir (`~/.local/share/opencode`); nothing is cached locally besides UI state in `localStorage`.
+- **Modes & memory** — prompt packs live in `<workspace>/opencode.json` (`alfred` key, synced as native `alfred-*` agents); student memory and the course index live in `<datadir>/alfred/`.
 - **`opencode.json`** — auto-written/merged by the harness on boot (absolute machine paths); don't hand-edit, it's git-ignored.
 - **Ports/auth** — serve probes 4123–4172 with generated Basic auth; dev defaults live in the `dev` npm script.

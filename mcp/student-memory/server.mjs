@@ -1,15 +1,23 @@
 #!/usr/bin/env node
 // albert-student-memory — MCP server (stdio) tracking per-topic mastery.
-// Storage: ALBERT_DATA_DIR/memory.json (shared with the app, which also
-// injects a mastery brief into every tutor turn).
+// Storage: <opencode-data-dir>/alfred/memory.json (shared with the app, which
+// also injects a mastery brief into every tutor turn). Mastery follows the
+// student across repos — never a dot-dir inside a workspace.
 // IMPORTANT: never print to stdout (it carries JSON-RPC). Use stderr.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { promises as fs } from 'fs'
+import os from 'os'
 import path from 'path'
 
-const DATA_DIR = process.argv[3] || process.env.ALBERT_DATA_DIR || path.join(process.argv[2] || process.cwd(), '.albert')
+// Mirrors opencode's own data-dir layout (xdg-basedir): $XDG_DATA_HOME/opencode,
+// else ~/.local/share/opencode. Same tree that holds its session storage.
+const opencodeDataDir = () => {
+  const home = process.env.OPENCODE_TEST_HOME || os.homedir()
+  return path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode')
+}
+const DATA_DIR = process.argv[3] || process.env.ALBERT_DATA_DIR || path.join(opencodeDataDir(), 'alfred')
 const MEM_PATH = path.join(DATA_DIR, 'memory.json')
 const today = () => new Date().toISOString().slice(0, 10)
 

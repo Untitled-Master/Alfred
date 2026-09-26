@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 
-export default function Dropdown({ value, options, onChange, align = 'right', direction = 'down', searchPlaceholder = '' }) {
+export default function Dropdown({ value, options, onChange, align = 'right', direction = 'down', searchPlaceholder = '', className = '' }) {
   const [open, setOpen] = useState(false)
   const [f, setF] = useState('')
   const ref = useRef(null)
@@ -16,7 +16,7 @@ export default function Dropdown({ value, options, onChange, align = 'right', di
       document.removeEventListener('mousedown', close)
       document.removeEventListener('keydown', esc)
     }
-  }, [open ])
+  }, [open])
 
   const cur = options.find((o) => o.value === value)
   const filtering = !!(searchPlaceholder && f.trim())
@@ -27,8 +27,8 @@ export default function Dropdown({ value, options, onChange, align = 'right', di
     : options
 
   return (
-    <div className="dd" ref={ref}>
-      <button className={`dd-btn${open ? ' open' : ''}`} onClick={() => { setF(''); setOpen((o) => !o) }}>
+    <div className={`dd${className ? ` ${className}` : ''}`} ref={ref}>
+      <button type="button" className={`dd-btn${open ? ' open' : ''}`} onClick={() => { setF(''); setOpen((o) => !o) }}>
         <span className="dd-label">{cur?.label ?? value}</span>
         <ChevronDown size={13} className={`dd-chev${open ? ' up' : ''}`} />
       </button>
@@ -45,16 +45,18 @@ export default function Dropdown({ value, options, onChange, align = 'right', di
             ) : (
               <div
                 key={o.value}
-                className={`dd-item${o.value === value ? ' on' : ''}`}
+                className={`dd-item${o.value === value ? ' on' : ''}${o.hint ? ' stacked' : ''}`}
                 onClick={() => { onChange(o.value); setOpen(false) }}
               >
-                <span>{o.label}</span>
-                {o.hint && <span className="dd-hint">{o.hint}</span>}
+                <span className="dd-main">
+                  <span className="dd-title">{o.label}</span>
+                  {o.hint && <span className="dd-sub" title={o.hint}>{o.hint}</span>}
+                </span>
                 {o.value === value && <Check size={13} className="dd-check" />}
               </div>
             )
           )}
-          {filtering && !shown.length && <div className="dd-empty">No models match.</div>}
+          {filtering && !shown.length && <div className="dd-empty">No matches.</div>}
         </div>
       )}
     </div>

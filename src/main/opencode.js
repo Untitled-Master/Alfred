@@ -2,7 +2,7 @@
 // HTTP API (verified against server 1.18.31): REST for sessions/prompts,
 // SSE (/event) for streaming part updates + completion, basic-auth locked.
 import { spawn, execFileSync } from 'child_process'
-import { randomBytes } from 'crypto'
+import { randomBytes, createHash } from 'crypto'
 import { promises as fs } from 'fs'
 import { existsSync } from 'fs'
 import os from 'os'
@@ -21,11 +21,25 @@ export const isFreeModel = (providerID, modelID, def = {}) => {
 }
 
 const MIME_BY_EXT = {
-  js: 'text/javascript', jsx: 'text/javascript', ts: 'text/typescript', tsx: 'text/typescript',
-  json: 'application/json', css: 'text/css', html: 'text/html', md: 'text/markdown',
-  markdown: 'text/markdown', py: 'text/x-python', csv: 'text/csv', xml: 'text/xml',
-  pdf: 'application/pdf', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-  webp: 'image/webp', gif: 'image/gif'
+  js: 'text/javascript',
+  jsx: 'text/javascript',
+  ts: 'text/typescript',
+  tsx: 'text/typescript',
+  json: 'application/json',
+  css: 'text/css',
+  html: 'text/html',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  py: 'text/x-python',
+  csv: 'text/csv',
+  xml: 'text/xml',
+  pdf: 'application/pdf',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif'
 }
 
 export const mimeForPath = (p = '') => {
@@ -349,12 +363,16 @@ student the fastest answer.
 
 A successful response is the one that leaves the student more capable
 of answering the next question without help.
-`;
+`
 
-// Modes = switchable prompt packs (soul + system). 'study' reuses the tutor
-// prompts above; the engineering modes are self-contained disciplines.
-// Active mode + custom modes live in prompts.json (per workspace).
+// Modes = switchable prompt packs (soul + system). 'opencode' is the plain
+// default (no soul, no system, nothing added — raw opencode behavior);
+// 'study' reuses the tutor prompts above; the engineering modes are
+// self-contained disciplines.
+// Active mode + custom modes live in <workspace>/opencode.json under the
+// `alfred` key (per workspace), and are synced as native `alfred-*` agents.
 export const DEFAULT_MODES = [
+  { id: 'opencode', name: 'Opencode', soul: '', system: '' },
   { id: 'study', name: 'Study tutor', soul: DEFAULT_SOUL, system: DEFAULT_SYSTEM },
   {
     id: 'dev-agent',
@@ -533,14 +551,28 @@ export class OpencodeManager {
     return process.env.ALBERT_WORKSPACE || path.join(os.homedir(), 'albertapp')
   }
 
-  dataDir() {
-    return path.join(this.workspace, '.albert')
+  // opencode's own data dir — the same tree that holds its session storage,
+  // so Alfred state is shared across repos on this machine. Mirrors opencode's
+  // xdg-basedir layout (XDG_DATA_HOME, else ~/.local/share; OPENCODE_TEST_HOME
+  // swaps homedir for tests, same as opencode itself).
+  opencodeDataDir() {
+    const home = process.env.OPENCODE_TEST_HOME || os.homedir()
+    return path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode')
+  }
+
+  // Alfred-owned state (student memory, course index) lives in opencode's
+  // data dir — never a dot-dir inside a workspace.
+  stateDir() {
+    if (process.env.ALBERT_DATA_DIR && existsSync(process.env.ALBERT_DATA_DIR))
+      return process.env.ALBERT_DATA_DIR
+    return path.join(this.opencodeDataDir(), 'alfred')
   }
 
   // Alfred's bundled MCP servers (dev: <repo>/mcp, packaged: <resources>/mcp,
   // override: ALBERT_MCP_DIR for tests).
   mcpDir() {
-    if (process.env.ALBERT_MCP_DIR && existsSync(process.env.ALBERT_MCP_DIR)) return process.env.ALBERT_MCP_DIR
+    if (process.env.ALBERT_MCP_DIR && existsSync(process.env.ALBERT_MCP_DIR))
+      return process.env.ALBERT_MCP_DIR
     const here = path.dirname(fileURLToPath(import.meta.url))
     const dev = path.join(here, '..', '..', 'mcp')
     if (existsSync(dev)) return dev
@@ -565,7 +597,7 @@ export class OpencodeManager {
       ELECTRON_RUN_AS_NODE: '1',
       NODE_PATH: candidates.join(path.delimiter),
       ALBERT_COURSE_DIR: this.workspace,
-      ALBERT_DATA_DIR: this.dataDir(),
+      ALBERT_DATA_DIR: this.stateDir(),
       ...extra
     }
   }
@@ -577,41 +609,23 @@ export class OpencodeManager {
     const course = path.join(mcp, 'course-search', 'server.mjs')
     const memory = path.join(mcp, 'student-memory', 'server.mjs')
     if (!existsSync(course) || !existsSync(memory)) return false
-    await fs.mkdir(this.dataDir(), { recursive: true })
-  const entry = (server) => ({
-    // opencode shape: single command ARRAY (binary + args, never separate
-    // `args`), `environment` (not `env`), type 'local'. Anything else is
-    // silently dropped — verified against the docs after a load failure.
-    type: 'local',
-    command: [process.execPath, server, this.workspace, this.dataDir()],
-    environment: this.mcpRuntimeEnv(),
-    enabled: true
-  })
-    const cfgPath = path.join(this.workspace, 'opencode.json')
-    let cfg = {}
-    let raw = null
-    try {
-      raw = await fs.readFile(cfgPath, 'utf8')
-    } catch { /* fresh */ }
-    if (raw) {
-      try {
-        cfg = JSON.parse(raw)
-      } catch {
-        try {
-          cfg = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ''))
-        } catch {
-          try {
-            await fs.writeFile(cfgPath + '.albert-bak', raw)
-          } catch { /* best effort */ }
-          cfg = {}
-        }
-      }
-    }
-    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {}
+    await fs.mkdir(this.stateDir(), { recursive: true })
+    const entry = (server) => ({
+      // opencode shape: single command ARRAY (binary + args, never separate
+      // `args`), `environment` (not `env`), type 'local'. Anything else is
+      // silently dropped — verified against the docs after a load failure.
+      type: 'local',
+      command: [process.execPath, server, this.workspace, this.stateDir()],
+      environment: this.mcpRuntimeEnv(),
+      enabled: true
+    })
+    const cfg = await this.readProjectConfig()
     cfg.mcp = cfg.mcp && typeof cfg.mcp === 'object' ? cfg.mcp : {}
     cfg.mcp['albert-course-search'] = entry(course)
     cfg.mcp['albert-student-memory'] = entry(memory)
-    await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2))
+    await this.writeProjectConfig(cfg)
+    // Modes as native agents (per workspace, every boot/switch).
+    await this.syncModeAgents().catch(() => {})
     return true
   }
 
@@ -619,7 +633,7 @@ export class OpencodeManager {
   // student-memory MCP server maintains, so both stay in sync for free).
   async memoryBrief() {
     try {
-      const raw = await fs.readFile(path.join(this.dataDir(), 'memory.json'), 'utf8')
+      const raw = await fs.readFile(path.join(this.stateDir(), 'memory.json'), 'utf8')
       const mem = JSON.parse(raw)
       const ks = Object.keys(mem.topics || {})
       if (!ks.length) return ''
@@ -640,11 +654,20 @@ export class OpencodeManager {
   async resolveBinary() {
     if (process.env.OPENCODE_BIN) return { cmd: process.env.OPENCODE_BIN, shell: false }
     if (process.platform === 'win32') {
-      const exe = path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe')
+      const exe = path.join(
+        process.env.APPDATA || '',
+        'npm',
+        'node_modules',
+        'opencode-ai',
+        'bin',
+        'opencode.exe'
+      )
       try {
         await fs.stat(exe)
         return { cmd: exe, shell: false }
-      } catch { /* fall through to shim */ }
+      } catch {
+        /* fall through to shim */
+      }
       return { cmd: 'opencode.cmd', shell: true }
     }
     return { cmd: 'opencode', shell: false }
@@ -697,7 +720,10 @@ export class OpencodeManager {
       }
     }
     if (!this.child) {
-      if (missing) throw new Error('opencode binary not found — install it from opencode.ai and restart Alfred.')
+      if (missing)
+        throw new Error(
+          'opencode binary not found — install it from opencode.ai and restart Alfred.'
+        )
       throw new Error('could not start opencode serve (ports 4123-4172 busy?)')
     }
     this.pumpEvents()
@@ -755,15 +781,21 @@ export class OpencodeManager {
           this.version = j.version || null
           return
         }
-      } catch { /* retry */ }
+      } catch {
+        /* retry */
+      }
       if (Date.now() - start > timeoutMs) throw new Error('opencode health check timed out')
       await new Promise((r) => setTimeout(r, 400))
     }
   }
 
-  async api(method, path, body) {
-    const sep = path.includes('?') ? '&' : '?'
-    const url = `${this.baseUrl}${path}${sep}directory=${encodeURIComponent(this.workspace)}`
+  // opts.global skips the ?directory= scope (session list, projects, agents
+  // are cross-repo; the server ignores the param on global routes anyway).
+  async api(method, path, body, opts = {}) {
+    const url =
+      opts.global || !this.workspace
+        ? `${this.baseUrl}${path}`
+        : `${this.baseUrl}${path}${path.includes('?') ? '&' : '?'}directory=${encodeURIComponent(this.workspace)}`
     const r = await fetch(url, {
       method,
       headers: { Authorization: this.auth, 'Content-Type': 'application/json' },
@@ -774,7 +806,9 @@ export class OpencodeManager {
     let json = null
     try {
       json = JSON.parse(text)
-    } catch { /* non-JSON */ }
+    } catch {
+      /* non-JSON */
+    }
     if (!r.ok) {
       const msg = (json && (json.message || json.error)) || text || `HTTP ${r.status}`
       throw new Error(typeof msg === 'string' ? msg.slice(0, 300) : `HTTP ${r.status}`)
@@ -810,10 +844,679 @@ export class OpencodeManager {
 
   gitBranch() {
     try {
-      const out = execFileSync('git', ['branch', '--show-current'], { cwd: this.workspace, stdio: ['ignore', 'pipe', 'ignore'] })
+      const out = execFileSync('git', ['branch', '--show-current'], {
+        cwd: this.workspace,
+        stdio: ['ignore', 'pipe', 'ignore']
+      })
       return String(out).trim() || null
     } catch {
       return null
+    }
+  }
+
+  gitRoot(dir) {
+    try {
+      const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: dir || this.workspace,
+        stdio: ['ignore', 'pipe', 'ignore']
+      })
+      return String(out).trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  // Detect GitHub owner and repo from git remote origin URL.
+  _getGithubRepo(root) {
+    try {
+      const out = String(
+        execFileSync('git', ['config', '--get', 'remote.origin.url'], {
+          cwd: root,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 3000
+        }) || ''
+      ).trim()
+      const m = out.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/i)
+      if (m) return { owner: m[1], repo: m[2] }
+    } catch {}
+    return null
+  }
+
+  // Fetch actual GitHub avatars for repo authors via GitHub API and cache them.
+  async _syncGithubAvatars(root) {
+    const gh = this._getGithubRepo(root)
+    if (!gh) return
+    const key = `${gh.owner}/${gh.repo}`
+    if (!this._avatarCache) this._avatarCache = new Map()
+    if (!this._ghRepoCache) this._ghRepoCache = new Map()
+    const cached = this._ghRepoCache.get(key)
+    const now = Date.now()
+    if (cached && now - cached.fetchedAt < 5 * 60 * 1000) return
+    this._ghRepoCache.set(key, { fetchedAt: now })
+
+    if (gh.owner) {
+      this._avatarCache.set(
+        gh.owner.toLowerCase(),
+        `https://avatars.githubusercontent.com/${gh.owner}?s=80`
+      )
+    }
+
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${gh.owner}/${gh.repo}/commits?per_page=40`,
+        {
+          headers: { 'User-Agent': 'Alfred' }
+        }
+      )
+      if (res.ok) {
+        const commits = await res.json()
+        if (Array.isArray(commits)) {
+          for (const c of commits) {
+            const avatar = c.author?.avatar_url
+            if (avatar) {
+              if (c.author?.login) this._avatarCache.set(c.author.login.toLowerCase(), avatar)
+              if (c.commit?.author?.email)
+                this._avatarCache.set(c.commit.author.email.toLowerCase(), avatar)
+              if (c.commit?.author?.name)
+                this._avatarCache.set(c.commit.author.name.toLowerCase(), avatar)
+            }
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${gh.owner}/${gh.repo}/contributors?per_page=30`,
+        {
+          headers: { 'User-Agent': 'Alfred' }
+        }
+      )
+      if (res.ok) {
+        const contribs = await res.json()
+        if (Array.isArray(contribs)) {
+          for (const c of contribs) {
+            if (c.login && c.avatar_url) {
+              this._avatarCache.set(c.login.toLowerCase(), c.avatar_url)
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Derive a GitHub / Gravatar avatar URL from an email address and name.
+  _avatarFor(email, name, ghOwner) {
+    const e = String(email || '')
+      .trim()
+      .toLowerCase()
+    const n = String(name || '').trim()
+
+    // 1. Check in-memory avatar cache (populated from GitHub API)
+    if (this._avatarCache) {
+      if (e && this._avatarCache.has(e)) return this._avatarCache.get(e)
+      if (n && this._avatarCache.has(n.toLowerCase())) return this._avatarCache.get(n.toLowerCase())
+    }
+
+    // 2. Noreply GitHub email patterns
+    if (e) {
+      const ghIdMatch = e.match(/^(\d+)\+([^@]+)@users\.noreply\.github\.com$/)
+      if (ghIdMatch) return `https://avatars.githubusercontent.com/u/${ghIdMatch[1]}?v=4&s=80`
+
+      const ghUserMatch = e.match(/^([^@]+)@users\.noreply\.github\.com$/)
+      if (ghUserMatch) return `https://avatars.githubusercontent.com/${ghUserMatch[1]}?s=80`
+    }
+
+    // 3. If author name matches repo owner or looks like a GitHub username (no spaces)
+    if (ghOwner && n && ghOwner.toLowerCase() === n.toLowerCase()) {
+      return `https://avatars.githubusercontent.com/${ghOwner}?s=80`
+    }
+    if (n && /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/.test(n)) {
+      return `https://avatars.githubusercontent.com/${n}?s=80`
+    }
+
+    // 4. Gravatar fallback
+    if (e) {
+      const hash = createHash('md5').update(e).digest('hex')
+      return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=80`
+    }
+    return null
+  }
+
+  // Git status for the right panel. Runs inside the given directory's repo
+  // root (read-only git verbs); anything failing (no git, not a repo) →
+  // { repo: false }. dir defaults to the workspace; callers pass a session's
+  // directory to scope the panel/composer to that thread's repo.
+  async gitInfo(dir) {
+    const root = this.gitRoot(dir)
+    if (!root) return { repo: false, dir: dir || null }
+    const run = (args) =>
+      String(
+        execFileSync('git', args, {
+          cwd: root,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 15000
+        }) || ''
+      )
+    try {
+      const gh = this._getGithubRepo(root)
+      // Background sync GitHub avatars (non-blocking)
+      this._syncGithubAvatars(root).catch(() => {})
+
+      const branch = run(['branch', '--show-current']).trim() || null
+      // Local + remote branch names for the commit form dropdowns.
+      let branches = []
+      try {
+        branches = run(['branch', '--format=%(refname:short)'])
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      } catch {
+        /* no branches yet */
+      }
+      let remoteBranches = []
+      try {
+        const seen = new Set()
+        for (const line of run(['branch', '-r', '--format=%(refname:short)']).split('\n')) {
+          const t = line.trim()
+          if (!t || t.endsWith('/HEAD')) continue
+          const name = t.includes('/') ? t.slice(t.indexOf('/') + 1) : t
+          if (name && !seen.has(name)) {
+            seen.add(name)
+            remoteBranches.push(name)
+          }
+        }
+      } catch {
+        /* no remotes */
+      }
+      const status = run(['status', '--porcelain=v1', '-uall', '-b'])
+      let ahead = 0
+      let behind = 0
+      try {
+        const ab = run(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])
+          .trim()
+          .split(/\s+/)
+        ahead = Number(ab[0]) || 0
+        behind = Number(ab[1]) || 0
+      } catch {
+        /* no upstream */
+      }
+
+      // Unstaged diff lines per file
+      const unstagedStats = new Map()
+      try {
+        const out = run(['diff', '--numstat'])
+        for (const line of out.split('\n')) {
+          if (!line.trim()) continue
+          const [add, del, ...p] = line.split('\t')
+          const path = p.join('\t')
+          unstagedStats.set(path, {
+            additions: add === '-' ? 0 : Number(add) || 0,
+            deletions: del === '-' ? 0 : Number(del) || 0
+          })
+        }
+      } catch {}
+
+      // Staged diff lines per file
+      const stagedStats = new Map()
+      try {
+        const out = run(['diff', '--cached', '--numstat'])
+        for (const line of out.split('\n')) {
+          if (!line.trim()) continue
+          const [add, del, ...p] = line.split('\t')
+          const path = p.join('\t')
+          stagedStats.set(path, {
+            additions: add === '-' ? 0 : Number(add) || 0,
+            deletions: del === '-' ? 0 : Number(del) || 0
+          })
+        }
+      } catch {}
+
+      const files = []
+      for (const line of status.split('\n')) {
+        if (!line || line.startsWith('##')) continue
+        const x = line[0]
+        const y = line[1]
+        let p = line.slice(3)
+        // Renames: "R  old -> new" — track the new path.
+        const arrow = p.indexOf(' -> ')
+        if (arrow !== -1) p = p.slice(arrow + 4)
+        // Quoted paths (spaces/unicode): dequote simply.
+        if (p.startsWith('"') && p.endsWith('"')) {
+          try {
+            p = JSON.parse(p)
+          } catch {
+            /* keep raw */
+          }
+        }
+        const uStat = unstagedStats.get(p)
+        const sStat = stagedStats.get(p)
+        files.push({
+          path: p,
+          staged: x !== ' ' && x !== '?' ? x : '',
+          unstaged: y !== ' ' && y !== '?' ? y : '',
+          untracked: x === '?' && y === '?',
+          stagedAdditions: sStat?.additions || 0,
+          stagedDeletions: sStat?.deletions || 0,
+          unstagedAdditions: uStat?.additions || 0,
+          unstagedDeletions: uStat?.deletions || 0
+        })
+      }
+      let log = []
+      try {
+        const raw = run([
+          'log',
+          '-15',
+          '--format=%x1e%H%x1f%h%x1f%aN%x1f%aE%x1f%ar%x1f%s',
+          '--numstat'
+        ])
+        let cur = null
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('\x1e')) {
+            const [hash, short, author, email, ago, ...msg] = line.slice(1).split('\x1f')
+            cur = {
+              hash,
+              short,
+              author,
+              email,
+              ago,
+              msg: msg.join('\x1f'),
+              avatar: this._avatarFor(email, author, gh?.owner),
+              additions: 0,
+              deletions: 0,
+              files: 0
+            }
+            log.push(cur)
+            continue
+          }
+          if (!cur || !line.trim()) continue
+          const parts = line.split('\t')
+          if (parts.length < 3) continue
+          const add = parts[0] === '-' ? 0 : Number(parts[0]) || 0
+          const del = parts[1] === '-' ? 0 : Number(parts[1]) || 0
+          cur.additions += add
+          cur.deletions += del
+          cur.files++
+        }
+      } catch {
+        /* no commits yet */
+      }
+      return { repo: true, root, branch, branches, remoteBranches, ahead, behind, files, log }
+    } catch {
+      return { repo: false }
+    }
+  }
+
+  // Unified diff for one file (capped). staged=true diffs the index.
+  gitDiff(relPath, staged, dir) {
+    const root = this.gitRoot(dir)
+    if (!root) throw new Error('not a git repository')
+    const args = ['diff', '--no-color', '--unified=3']
+    if (staged) args.push('--cached')
+    args.push('--', String(relPath || ''))
+    const out = String(
+      execFileSync('git', args, {
+        cwd: root,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 15000,
+        maxBuffer: 4 * 1024 * 1024
+      }) || ''
+    )
+    const capped = out.length > 100000
+    return { diff: capped ? out.slice(0, 100000) : out, truncated: capped }
+  }
+
+  // Switch branches (optionally creating). Errors surface (e.g. dirty tree).
+  gitCheckout(branch, create, dir) {
+    const root = this.gitRoot(dir)
+    if (!root) throw new Error('Not a git repository')
+    const name = String(branch || '').trim()
+    if (!name) throw new Error('Branch name is required')
+    const opts = { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 }
+    try {
+      if (create) {
+        try {
+          execFileSync('git', ['checkout', '-b', name], opts)
+        } catch {
+          // Already exists — just switch to it.
+          execFileSync('git', ['checkout', name], opts)
+        }
+      } else {
+        execFileSync('git', ['checkout', name], opts)
+      }
+      const cur = String(execFileSync('git', ['branch', '--show-current'], opts) || '').trim()
+      return { branch: cur || name }
+    } catch (err) {
+      const msg = err.stderr ? String(err.stderr).trim() : err.message || String(err)
+      throw new Error(msg.split('\n').filter(Boolean).slice(-2).join(' '))
+    }
+  }
+
+  // Commit and/or push with branch creation and PR opening support.
+  async gitCommitAction(opts = {}, dir) {
+    const root = this.gitRoot(dir)
+    if (!root) throw new Error('Not a git repository')
+    const run = (args) =>
+      String(
+        execFileSync('git', args, {
+          cwd: root,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 30000
+        }) || ''
+      )
+
+    const {
+      message,
+      description = '',
+      newBranch,
+      push = false,
+      pushBranch = '',
+      createPr = false,
+      prTitle = '',
+      stageAll = false
+    } = opts
+
+    if (!message || !message.trim()) {
+      throw new Error('Commit message is required')
+    }
+
+    try {
+      // 1. Branch checkout / creation if requested
+      let curBranch = run(['branch', '--show-current']).trim()
+      if (newBranch && newBranch.trim() && newBranch.trim() !== curBranch) {
+        const nb = newBranch.trim()
+        try {
+          run(['checkout', '-b', nb])
+          curBranch = nb
+        } catch {
+          // If branch already exists, switch to it
+          run(['checkout', nb])
+          curBranch = nb
+        }
+      }
+
+      // 2. Stage files if nothing is staged or stageAll requested
+      let stagedCount = 0
+      try {
+        const stagedOut = run(['diff', '--cached', '--name-only']).trim()
+        stagedCount = stagedOut ? stagedOut.split('\n').filter(Boolean).length : 0
+      } catch {}
+
+      if (stagedCount === 0 || stageAll) {
+        run(['add', '-A'])
+      }
+
+      // 3. Commit
+      const commitArgs = ['commit', '-m', message.trim()]
+      if (description && description.trim()) {
+        commitArgs.push('-m', description.trim())
+      }
+      run(commitArgs)
+
+      // 4. Push if requested (HEAD -> pushBranch, defaults to the commit branch)
+      let pushedTo = null
+      if (push) {
+        curBranch = run(['branch', '--show-current']).trim()
+        const target = String(pushBranch || '').trim() || curBranch
+        try {
+          run(['push', 'origin', `HEAD:${target}`])
+        } catch {
+          // If upstream not set, push with -u
+          run(['push', '-u', 'origin', `HEAD:${target}`])
+        }
+        pushedTo = target
+      }
+
+      // 5. Build PR URL if requested
+      let prUrl = null
+      if (createPr && push) {
+        const gh = this._getGithubRepo(root)
+        if (gh) {
+          const head = pushedTo || run(['branch', '--show-current']).trim()
+          prUrl = `https://github.com/${gh.owner}/${gh.repo}/compare/${head}?expand=1&title=${encodeURIComponent(prTitle || message.trim())}&body=${encodeURIComponent(description || '')}`
+        }
+      }
+
+      return {
+        success: true,
+        branch: curBranch,
+        pushedTo,
+        prUrl
+      }
+    } catch (err) {
+      const msg = err.stderr ? String(err.stderr).trim() : err.message || String(err)
+      throw new Error(msg)
+    }
+  }
+
+  // Generate an AI-assisted commit message, description, branch name, and PR title from diff.
+  async gitGenerateCommit(dir) {
+    const root = this.gitRoot(dir)
+    if (!root) throw new Error('Not a git repository')
+    const run = (args) => {
+      try {
+        return String(
+          execFileSync('git', args, {
+            cwd: root,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 15000
+          }) || ''
+        )
+      } catch {
+        return ''
+      }
+    }
+
+    let diff = run(['diff', '--cached'])
+    if (!diff.trim()) diff = run(['diff'])
+    const status = run(['status', '--short'])
+    const numstat = run(['diff', '--stat'])
+
+    const files = status
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => l.slice(3).trim())
+    let type = 'feat'
+    let scope = ''
+
+    const isDoc = files.length > 0 && files.every((f) => f.endsWith('.md') || f.includes('docs/'))
+    const isTest = files.length > 0 && files.every((f) => f.includes('test') || f.includes('spec'))
+    const isStyle =
+      files.length > 0 && files.every((f) => f.endsWith('.css') || f.endsWith('.scss'))
+    const isChore =
+      files.length > 0 &&
+      files.every((f) => f.includes('package') || f.includes('.gitignore') || f.includes('.config'))
+
+    if (isDoc) type = 'docs'
+    else if (isTest) type = 'test'
+    else if (isStyle) type = 'style'
+    else if (isChore) type = 'chore'
+    else if (diff.includes('fix') || diff.includes('bug') || diff.includes('error')) type = 'fix'
+
+    if (files.some((f) => f.includes('GitPanel') || f.includes('git'))) scope = 'git'
+    else if (files.some((f) => f.includes('Navbar') || f.includes('Sidebar') || f.includes('ui')))
+      scope = 'ui'
+    else if (files.some((f) => f.includes('main') || f.includes('preload'))) scope = 'core'
+    else if (files.some((f) => f.includes('mcp'))) scope = 'mcp'
+
+    const changedSummary = files
+      .slice(0, 3)
+      .map((f) => path.basename(f))
+      .join(', ')
+    const mainAction =
+      type === 'feat' ? 'add' : type === 'fix' ? 'fix' : type === 'docs' ? 'update' : 'update'
+    const scopeStr = scope ? `(${scope})` : ''
+
+    // Attempt AI completion via OpenCode server if available
+    try {
+      const models = await this.models().catch(() => null)
+      const model = models?.free?.[0] || models?.paid?.[0]
+      if (model && this.baseUrl) {
+        const session = await this.api(
+          'POST',
+          '/session',
+          { title: 'commit-gen' },
+          { global: true }
+        )
+        if (session?.id) {
+          const prompt = `Analyze this git diff and output ONLY a JSON object in this exact format (no markdown, no quotes around json, raw json):
+{"title": "${type}${scopeStr}: short summary under 60 chars", "description": "1-2 bullet points of changes", "branch": "${type}/${scope || 'update'}-changes", "prTitle": "${type}${scopeStr}: PR summary"}
+
+Git changes:
+${(numstat || diff).slice(0, 3000)}`
+
+          await this.api('POST', `/session/${session.id}/prompt_async`, {
+            model: { providerID: model.providerID, modelID: model.modelID },
+            parts: [{ type: 'text', text: prompt }],
+            textOnly: true
+          })
+
+          for (let i = 0; i < 8; i++) {
+            await new Promise((r) => setTimeout(r, 500))
+            const msgs = await this.api('GET', `/session/${session.id}/message`)
+            const arr = Array.isArray(msgs) ? msgs : msgs?.messages || []
+            const assistant = arr.find((m) => m.role === 'assistant' && (m.parts?.length || m.text))
+            if (assistant) {
+              const text =
+                assistant.text || assistant.parts?.map((p) => p.text || '').join('') || ''
+              const match = text.match(/\{[\s\S]*\}/)
+              if (match) {
+                const parsed = JSON.parse(match[0])
+                if (parsed.title) {
+                  return {
+                    title: parsed.title,
+                    description: parsed.description || '',
+                    branch: parsed.branch || `${type}/${scope || 'update'}-changes`,
+                    prTitle: parsed.prTitle || parsed.title
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // Smart semantic fallback
+    return {
+      title: `${type}${scopeStr}: ${mainAction} changes in ${changedSummary || 'workspace'}`,
+      description: files.length > 0 ? `Changes:\n${files.map((f) => `- ${f}`).join('\n')}` : '',
+      branch: `${type}/${scope || 'feature'}-${Date.now().toString().slice(-4)}`,
+      prTitle: `${type}${scopeStr}: ${mainAction} ${scope || 'updates'} in ${changedSummary || 'workspace'}`
+    }
+  }
+
+  // Contributors for the People tab: commits + lines + weekly sparkline,
+  // with Gravatar / GitHub avatar URLs derived from author emails and names.
+  async gitContributors(dir) {
+    const root = this.gitRoot(dir)
+    if (!root) return { repo: false, contributors: [] }
+    const gh = this._getGithubRepo(root)
+    // Await sync if needed so contributors get their actual GitHub pictures
+    await this._syncGithubAvatars(root).catch(() => {})
+
+    const run = (args) =>
+      String(
+        execFileSync('git', args, {
+          cwd: root,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 30000,
+          maxBuffer: 16 * 1024 * 1024
+        }) || ''
+      )
+    try {
+      // One pass: author identity + date headers, then numstat rows.
+      const raw = run([
+        'log',
+        '--all',
+        '--no-merges',
+        '--pretty=format:%x1e%aN%x1f%aE%x1f%aI',
+        '--numstat',
+        '--since=2.years.ago'
+      ])
+      const byKey = new Map()
+      let cur = null
+      const weekKey = (iso) => {
+        const d = new Date(iso)
+        if (Number.isNaN(d.getTime())) return null
+        // Monday-based week index as YYYY-WW for bucketing.
+        const day = (d.getUTCDay() + 6) % 7
+        d.setUTCDate(d.getUTCDate() - day)
+        d.setUTCHours(0, 0, 0, 0)
+        return d.toISOString().slice(0, 10)
+      }
+      // Last 16 weeks of buckets (oldest → newest).
+      const weeks = []
+      {
+        const d = new Date()
+        const day = (d.getUTCDay() + 6) % 7
+        d.setUTCDate(d.getUTCDate() - day)
+        d.setUTCHours(0, 0, 0, 0)
+        for (let i = 15; i >= 0; i--) {
+          const w = new Date(d)
+          w.setUTCDate(w.getUTCDate() - i * 7)
+          weeks.push(w.toISOString().slice(0, 10))
+        }
+      }
+      const weekIndex = new Map(weeks.map((w, i) => [w, i]))
+
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('\x1e')) {
+          const [name, email, iso] = line.slice(1).split('\x1f')
+          const key = `${(email || '').trim().toLowerCase()}|${(name || '').trim()}`
+          if (!byKey.has(key)) {
+            byKey.set(key, {
+              name: (name || 'Unknown').trim() || 'Unknown',
+              email: (email || '').trim(),
+              commits: 0,
+              additions: 0,
+              deletions: 0,
+              weeks: Array(16).fill(0)
+            })
+          }
+          cur = byKey.get(key)
+          cur.commits++
+          const wk = weekKey(iso)
+          if (wk && weekIndex.has(wk)) cur.weeks[weekIndex.get(wk)]++
+          continue
+        }
+        if (!cur || !line.trim()) continue
+        // numstat: additions \t deletions \t path (binary: - \t - \t path)
+        const parts = line.split('\t')
+        if (parts.length < 3) continue
+        const add = parts[0] === '-' ? 0 : Number(parts[0]) || 0
+        const del = parts[1] === '-' ? 0 : Number(parts[1]) || 0
+        cur.additions += add
+        cur.deletions += del
+      }
+
+      const contributors = [...byKey.values()]
+        .map((c) => ({
+          ...c,
+          avatar: this._avatarFor(c.email, c.name, gh?.owner),
+          lines: c.additions + c.deletions,
+          net: c.additions - c.deletions
+        }))
+        .sort((a, b) => b.commits - a.commits || b.lines - a.lines)
+        .slice(0, 40)
+
+      const totalCommits = contributors.reduce((s, c) => s + c.commits, 0)
+      const totalLines = contributors.reduce((s, c) => s + c.lines, 0)
+      for (const c of contributors) {
+        c.share = totalCommits > 0 ? Math.round((c.commits / totalCommits) * 1000) / 10 : 0
+        c.lineShare = totalLines > 0 ? Math.round((c.lines / totalLines) * 1000) / 10 : 0
+      }
+      return {
+        repo: true,
+        root,
+        contributors,
+        totalCommits,
+        totalAdditions: contributors.reduce((s, c) => s + c.additions, 0),
+        totalDeletions: contributors.reduce((s, c) => s + c.deletions, 0),
+        weeks
+      }
+    } catch {
+      return { repo: false, contributors: [] }
     }
   }
 
@@ -827,7 +1530,9 @@ export class OpencodeManager {
     await this.ensureProjectConfig().catch(() => {})
     try {
       this.sseAbort?.abort()
-    } catch { /* pump reconnects on the new directory */ }
+    } catch {
+      /* pump reconnects on the new directory */
+    }
     return this.status()
   }
 
@@ -862,11 +1567,85 @@ export class OpencodeManager {
     return { connected: [...connected], free, paid, version: this.version }
   }
 
-  createSession(title) {
-    return this.api('POST', '/session', { title: title || 'Study session' })
+  // Session titles belong to the server: created untitled, the server's
+  // title agent names them after the first turn (via `session.updated`).
+  // Native mode agents depend on the server having (re)loaded the workspace
+  // opencode.json — a long-running serve predating the sync won't list them.
+  // Probe the live agent list (cached) and only send `agent` when the server
+  // knows it; otherwise the turn carries the full inline pack, so a stale
+  // server degrades to working instead of failing "Agent not found".
+  // (Verified: omitting `agent` is safe even on sessions created with an
+  // unknown one — resolution falls back instead of poisoning the session.)
+  async hasAgent(agent) {
+    if (!agent) return false
+    const now = Date.now()
+    if (!this.agentCache || now - this.agentCache.at > 30000) {
+      try {
+        const list = await this.listAgents()
+        this.agentCache = {
+          at: now,
+          set: new Set((list || []).map((a) => a.name || a.id).filter(Boolean))
+        }
+      } catch {
+        return false
+      }
+    }
+    return this.agentCache.set.has(agent)
   }
 
-  async   // Shared file-part builder (prompt + command). Returns null for text
+  // agent selects the native primary agent (Alfred mode) when known;
+  // parentID links a child thread (see getChildren).
+  async createSession({ agent, parentID } = {}) {
+    const body = {}
+    if (agent && (await this.hasAgent(agent))) body.agent = agent
+    if (parentID) body.parentID = parentID
+    return this.api('POST', '/session', body)
+  }
+
+  // Cross-repo listing: no ?directory= scope, newest first. Powers the
+  // sidebar; every repo (and the TUI) shares this one server store.
+  listSessions({ search, limit } = {}) {
+    const q = new URLSearchParams()
+    if (search) q.set('search', search)
+    if (limit) q.set('limit', String(limit))
+    const qs = q.toString()
+    return this.api('GET', `/session${qs ? `?${qs}` : ''}`, null, { global: true })
+  }
+
+  listProjects() {
+    return this.api('GET', '/project', null, { global: true })
+  }
+
+  listAgents() {
+    return this.api('GET', '/agent', null, { global: true })
+  }
+
+  getMessages(sessionID, { limit, before } = {}) {
+    const q = new URLSearchParams()
+    if (limit) q.set('limit', String(limit))
+    if (before) q.set('before', before)
+    const qs = q.toString()
+    return this.api('GET', `/session/${sessionID}/message${qs ? `?${qs}` : ''}`)
+  }
+
+  getSessionTodos(sessionID) {
+    return this.api('GET', `/session/${sessionID}/todo`)
+  }
+
+  forkSession(sessionID, messageID) {
+    return this.api('POST', `/session/${sessionID}/fork`, messageID ? { messageID } : {})
+  }
+
+  getChildren(sessionID) {
+    return this.api('GET', `/session/${sessionID}/children`)
+  }
+
+  // Manual renames write through so the server stays the source of truth.
+  updateSessionTitle(sessionID, title) {
+    return this.api('PATCH', `/session/${sessionID}`, { title })
+  }
+
+  async // Shared file-part builder (prompt + command). Returns null for text
   // attachments, which only prompt_async accepts as text parts.
   toFilePart(a) {
     if ((a.kind === 'image' || a.kind === 'pdf') && a.url) {
@@ -878,24 +1657,42 @@ export class OpencodeManager {
     if (a.kind === 'filepath' && a.path) abs = String(a.path)
     else if (a.kind === 'ref' && a.path) abs = path.join(this.workspace, a.path)
     if (!abs) return null
-    return { type: 'file', mime: mimeForPath(a.path), filename: a.filename || a.path, url: 'file:///' + abs.replace(/\\/g, '/') }
+    return {
+      type: 'file',
+      mime: mimeForPath(a.path),
+      filename: a.filename || a.path,
+      url: 'file:///' + abs.replace(/\\/g, '/')
+    }
   }
 
-  async prompt(sessionID, { providerID, modelID, text, attachments = [], variant = '', textOnly = false }) {
+  async prompt(
+    sessionID,
+    { providerID, modelID, agent, text, attachments = [], variant = '', textOnly = false }
+  ) {
     const parts = [{ type: 'text', text }]
     for (const a of attachments) {
       if (a.kind === 'text') {
-        parts.push({ type: 'text', text: `Attached file ${a.filename || 'file'}:\n${a.text || ''}` })
+        parts.push({
+          type: 'text',
+          text: `Attached file ${a.filename || 'file'}:\n${a.text || ''}`
+        })
       } else {
         const fp = this.toFilePart(a)
         if (fp) parts.push(fp)
       }
     }
     const pr = await this.prompts()
+    // With a native mode agent carrying soul+system, the turn only adds the
+    // dynamic memory brief; without one (or when the server doesn't know it
+    // yet) the full pack rides along.
+    const useAgent = agent && (await this.hasAgent(agent)) ? agent : ''
+    const brief = await this.memoryBrief()
+    const system = useAgent ? brief : pr.soul + '\n' + pr.system + brief
     const body = {
       model: { providerID, modelID },
+      ...(useAgent ? { agent: useAgent } : {}),
       ...(variant ? { variant } : {}),
-      system: pr.soul + '\n' + pr.system + (await this.memoryBrief()),
+      ...(system.trim() ? { system } : {}),
       parts
     }
     // Text-only fallback (e.g. small models emitting clashing tool-call ids):
@@ -939,10 +1736,6 @@ export class OpencodeManager {
     return this.api('POST', `/session/${sessionID}/abort`)
   }
 
-  messages(sessionID) {
-    return this.api('GET', `/session/${sessionID}/message`)
-  }
-
   findFiles(query) {
     return this.api('GET', `/find/file?query=${encodeURIComponent(query || '')}`)
   }
@@ -970,7 +1763,7 @@ export class OpencodeManager {
   // maintains — read-only here, the agent writes through its tools).
   async memory() {
     try {
-      const raw = await fs.readFile(path.join(this.dataDir(), 'memory.json'), 'utf8')
+      const raw = await fs.readFile(path.join(this.stateDir(), 'memory.json'), 'utf8')
       const mem = JSON.parse(raw)
       return mem && typeof mem === 'object' ? mem : { topics: {} }
     } catch {
@@ -978,39 +1771,115 @@ export class OpencodeManager {
     }
   }
 
-  // Soul + system prompts (Settings tabs) and modes. Stored per workspace
-  // in prompts.json; missing/blank fields fall back to the baked-in
-  // defaults. Legacy shape ({ soul, system }) is read as a study override.
-  promptsPath() {
-    return path.join(this.dataDir(), 'prompts.json')
+  // opencode's global config dir (~/.config/opencode — same path the server
+  // logs as its config source). OPENCODE_TEST_HOME swaps homedir for tests.
+  globalConfigDir() {
+    const home = process.env.OPENCODE_TEST_HOME || os.homedir()
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode')
   }
 
-  async readPromptsFile() {
+  // Prefer an existing global config file so we never shadow the user's own
+  // (opencode loads config.json / opencode.json / opencode.jsonc).
+  globalConfigPath() {
+    const dir = this.globalConfigDir()
+    for (const name of ['opencode.json', 'config.json', 'opencode.jsonc']) {
+      if (existsSync(path.join(dir, name))) return path.join(dir, name)
+    }
+    return path.join(dir, 'opencode.json')
+  }
+
+  // Config files (project or global) with // comment tolerance.
+  // Unparseable files are backed up and reset — never crash on them.
+  projectConfigPath() {
+    return path.join(this.workspace, 'opencode.json')
+  }
+
+  async readConfigFile(cfgPath) {
+    let raw = null
     try {
-      const raw = await fs.readFile(this.promptsPath(), 'utf8')
-      const parsed = JSON.parse(raw)
-      return parsed && typeof parsed === 'object' ? parsed : {}
+      raw = await fs.readFile(cfgPath, 'utf8')
     } catch {
-      return {}
+      /* fresh */
+    }
+    if (!raw) return {}
+    try {
+      const cfg = JSON.parse(raw)
+      return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {}
+    } catch {
+      try {
+        const cfg = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ''))
+        return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {}
+      } catch {
+        try {
+          await fs.writeFile(cfgPath + '.bak', raw)
+        } catch {
+          /* best effort */
+        }
+        return {}
+      }
     }
   }
 
+  async writeConfigFile(cfgPath, cfg) {
+    await fs.mkdir(path.dirname(cfgPath), { recursive: true })
+    await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2))
+  }
+
+  async readProjectConfig() {
+    return this.readConfigFile(this.projectConfigPath())
+  }
+
+  async writeProjectConfig(cfg) {
+    return this.writeConfigFile(this.projectConfigPath(), cfg)
+  }
+
+  // Soul + system prompts (Settings tabs) and modes. Stored per workspace in
+  // opencode.json under the `alfred` key (opencode ignores unknown keys);
+  // missing/blank fields fall back to the baked-in defaults. Legacy shape
+  // ({ soul, system }) is read as a study override.
+  async readPromptsFile() {
+    const cfg = await this.readProjectConfig()
+    const pack = cfg.alfred && typeof cfg.alfred === 'object' ? cfg.alfred : null
+    if (pack) return pack
+    // One-time import from the retired <workspace>/.albert/prompts.json.
+    try {
+      const raw = await fs.readFile(path.join(this.workspace, '.albert', 'prompts.json'), 'utf8')
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        await this.writePromptsFile(parsed)
+        try {
+          await fs.unlink(path.join(this.workspace, '.albert', 'prompts.json'))
+        } catch {
+          /* best effort */
+        }
+        // Legacy file consumed after this read; sync its modes as agents.
+        // (Safe: the file is gone, so syncModeAgents -> prompts() won't loop.)
+        await this.syncModeAgents().catch(() => {})
+        return parsed
+      }
+    } catch {
+      /* no legacy file */
+    }
+    return {}
+  }
+
   async writePromptsFile(file) {
-    await fs.mkdir(this.dataDir(), { recursive: true })
     const rest = { ...file }
     delete rest.soul
     delete rest.system // legacy top-level keys never written back
-    await fs.writeFile(
-      this.promptsPath(),
-      JSON.stringify({ activeMode: 'study', overrides: {}, customModes: {}, ...rest }, null, 2)
-    )
+    const cfg = await this.readProjectConfig()
+    cfg.alfred = { activeMode: 'opencode', overrides: {}, customModes: {}, ...rest }
+    await this.writeProjectConfig(cfg)
   }
 
   async prompts() {
     const file = await this.readPromptsFile()
     const customs = file.customModes && typeof file.customModes === 'object' ? file.customModes : {}
     const overrides = file.overrides && typeof file.overrides === 'object' ? file.overrides : {}
-    if ((typeof file.soul === 'string' && file.soul.trim()) || (typeof file.system === 'string' && file.system.trim())) {
+    if (
+      (typeof file.soul === 'string' && file.soul.trim()) ||
+      (typeof file.system === 'string' && file.system.trim())
+    ) {
       overrides.study = {
         ...(typeof file.soul === 'string' && file.soul.trim() ? { soul: file.soul } : {}),
         ...(typeof file.system === 'string' && file.system.trim() ? { system: file.system } : {}),
@@ -1019,7 +1888,7 @@ export class OpencodeManager {
     }
     const modes = [
       ...DEFAULT_MODES.map((m) => {
-        const o = (overrides[m.id] && typeof overrides[m.id] === 'object' ? overrides[m.id] : {})
+        const o = overrides[m.id] && typeof overrides[m.id] === 'object' ? overrides[m.id] : {}
         const soul = typeof o.soul === 'string' && o.soul.trim() ? o.soul : m.soul
         const system = typeof o.system === 'string' && o.system.trim() ? o.system : m.system
         return {
@@ -1046,8 +1915,8 @@ export class OpencodeManager {
           overridden: true
         }))
     ]
-    let activeMode = typeof file.activeMode === 'string' ? file.activeMode : 'study'
-    if (!modes.some((m) => m.id === activeMode)) activeMode = 'study'
+    let activeMode = typeof file.activeMode === 'string' ? file.activeMode : 'opencode'
+    if (!modes.some((m) => m.id === activeMode)) activeMode = 'opencode'
     const active = modes.find((m) => m.id === activeMode)
     return {
       soul: active.soul,
@@ -1058,8 +1927,84 @@ export class OpencodeManager {
       customSystem: active.overridden,
       activeMode,
       activeBuiltin: active.builtin,
-      modes: modes.map(({ id, name, builtin, soul, system }) => ({ id, name, builtin, soul, system }))
+      modes: modes.map(({ id, name, builtin, soul, system }) => ({
+        id,
+        name,
+        builtin,
+        soul,
+        system
+      }))
     }
+  }
+
+  // Alfred modes as native opencode primary agents (mode id -> agent id).
+  // Synced into the GLOBAL opencode config on purpose: the server resolves a
+  // session's project by git worktree (frozen at first sight — a moved folder
+  // keeps pointing at the old path), so per-project agent keys are missed
+  // whenever the worktree doesn't match the workspace. Global agents resolve
+  // for every session on this machine; turns, the TUI, and every other client
+  // share them. Only `alfred-*` keys are managed — user agents untouched.
+  // The per-turn `system` then carries just the dynamic memory brief, with a
+  // full-inline fallback (see hasAgent) when the server hasn't reloaded yet.
+  modeAgentId(modeId) {
+    return `alfred-${modeId}`
+  }
+
+  // Pack text per mode; empty means "plain opencode" — no agent entity at
+  // all (the server skips prompt-less agents, and none is needed: turns
+  // simply send no agent and no system prompt).
+  packText(m) {
+    return `${m.soul || ''}\n${m.system || ''}`.trim()
+  }
+
+  packModeAgents(p) {
+    const agent = {}
+    for (const m of p.modes) {
+      const text = this.packText(m)
+      if (!text) continue
+      agent[this.modeAgentId(m.id)] = {
+        mode: 'primary',
+        description: `Alfred ${m.name} mode`,
+        prompt: `${m.soul}\n${m.system}`
+      }
+    }
+    return agent
+  }
+
+  pruneModeAgents(agent, p) {
+    const wanted = new Set(
+      p.modes.filter((m) => this.packText(m)).map((m) => this.modeAgentId(m.id))
+    )
+    for (const key of Object.keys(agent)) {
+      if (key.startsWith('alfred-') && !wanted.has(key)) delete agent[key]
+    }
+    return agent
+  }
+
+  async syncModeAgents() {
+    const p = await this.prompts()
+    // Global: the copy the server always resolves.
+    const gPath = this.globalConfigPath()
+    const global = await this.readConfigFile(gPath)
+    global.agent = this.pruneModeAgents(
+      global.agent && typeof global.agent === 'object' ? global.agent : {},
+      p
+    )
+    Object.assign(global.agent, this.packModeAgents(p))
+    await this.writeConfigFile(gPath, global)
+    // Workspace: drop the pre-global leftovers (agents were briefly synced
+    // per-project); the `alfred` prompt pack stays — it's the source of truth.
+    const cfg = await this.readProjectConfig()
+    if (
+      cfg.agent &&
+      typeof cfg.agent === 'object' &&
+      Object.keys(cfg.agent).some((k) => k.startsWith('alfred-'))
+    ) {
+      this.pruneModeAgents(cfg.agent, { modes: [] })
+      await this.writeProjectConfig(cfg)
+    }
+    this.agentCache = null // our agent set changed; re-probe the server next turn
+    return p
   }
 
   async setPrompts({ soul, system } = {}) {
@@ -1067,7 +2012,8 @@ export class OpencodeManager {
     const p = await this.prompts()
     const clean = (v) => (typeof v === 'string' ? v : '')
     if (p.modes.some((m) => m.id === p.activeMode && !m.builtin)) {
-      file.customModes = file.customModes && typeof file.customModes === 'object' ? file.customModes : {}
+      file.customModes =
+        file.customModes && typeof file.customModes === 'object' ? file.customModes : {}
       file.customModes[p.activeMode] = {
         ...file.customModes[p.activeMode],
         name: p.modes.find((m) => m.id === p.activeMode)?.name || p.activeMode,
@@ -1080,7 +2026,7 @@ export class OpencodeManager {
     }
     file.activeMode = p.activeMode
     await this.writePromptsFile(file)
-    return this.prompts()
+    return this.syncModeAgents()
   }
 
   async setActiveMode(id) {
@@ -1089,12 +2035,15 @@ export class OpencodeManager {
     const file = await this.readPromptsFile()
     file.activeMode = id
     await this.writePromptsFile(file)
-    return this.prompts()
+    return this.syncModeAgents()
   }
 
   async saveCustomMode({ id, name, soul, system } = {}) {
     const clean = (v) => (typeof v === 'string' ? v : '')
-    const label = String(name || '').trim().slice(0, 60) || 'Custom mode'
+    const label =
+      String(name || '')
+        .trim()
+        .slice(0, 60) || 'Custom mode'
     let key = String(id || '')
       .toLowerCase()
       .trim()
@@ -1102,15 +2051,17 @@ export class OpencodeManager {
       .replace(/^-+|-+$/g, '')
       .slice(0, 40)
     if (!key) {
-      key = label
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 40) || 'custom'
+      key =
+        label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 40) || 'custom'
     }
     if (DEFAULT_MODES.some((m) => m.id === key)) key = `${key}-custom`
     const file = await this.readPromptsFile()
-    file.customModes = file.customModes && typeof file.customModes === 'object' ? file.customModes : {}
+    file.customModes =
+      file.customModes && typeof file.customModes === 'object' ? file.customModes : {}
     file.customModes[key] = {
       name: label,
       soul: clean(soul),
@@ -1119,37 +2070,15 @@ export class OpencodeManager {
     if (id && id !== key && file.customModes[id]) delete file.customModes[id] // renamed
     if (id && id !== key && file.activeMode === id) file.activeMode = key
     await this.writePromptsFile(file)
-    return this.prompts()
+    return this.syncModeAgents()
   }
 
   async deleteCustomMode(id) {
     const file = await this.readPromptsFile()
     if (file.customModes && file.customModes[id]) delete file.customModes[id]
-    if (file.activeMode === id) file.activeMode = 'study'
+    if (file.activeMode === id) file.activeMode = 'opencode'
     await this.writePromptsFile(file)
-    return this.prompts()
-  }
-
-  // Throwaway session for background jobs (titles): sync call, no SSE needed.
-  async title(conversation, model) {
-    const s = await this.api('POST', '/session', { title: 'title-gen' })
-    try {
-      const res = await this.api('POST', `/session/${s.id}/message`, {
-        model,
-        system: 'Reply with only a 2-4 word chat title, no punctuation, no quotes.',
-        parts: [{ type: 'text', text: `Title this study conversation in a few words:\n${conversation}` }]
-      })
-      const text = (res.parts || [])
-        .filter((p) => p.type === 'text')
-        .map((p) => p.text)
-        .join(' ')
-      const clean = text.replace(/^["'“”\s]+|["'“”.,!?;:\s]+$/g, '').trim().slice(0, 40)
-      return clean || null
-    } finally {
-      try {
-        await this.deleteSession(s.id)
-      } catch { /* best effort */ }
-    }
+    return this.syncModeAgents()
   }
 
   session(sessionID) {
@@ -1175,7 +2104,9 @@ export class OpencodeManager {
       while (this.baseUrl) {
         try {
           this.sseAbort = new AbortController()
-          const res = await fetch(`${this.baseUrl}/global/event?directory=${encodeURIComponent(this.workspace)}`, {
+          // Global stream: the server ignores any directory param — every frame
+          // carries its own `directory`, so all repos (and the TUI) stream here.
+          const res = await fetch(`${this.baseUrl}/global/event`, {
             headers: { Authorization: this.auth, Accept: 'text/event-stream' },
             signal: this.sseAbort.signal
           })
@@ -1192,10 +2123,14 @@ export class OpencodeManager {
               try {
                 const { payload } = JSON.parse(line.slice(5).trim())
                 if (payload && payload.type) this.sendEvent(payload)
-              } catch { /* partial frame */ }
+              } catch {
+                /* partial frame */
+              }
             }
           }
-        } catch { /* drop + backoff reconnect */ }
+        } catch {
+          /* drop + backoff reconnect */
+        }
         this.sseAbort = null
         if (!this.baseUrl) break
         await new Promise((r) => setTimeout(r, 2500))
@@ -1208,7 +2143,9 @@ export class OpencodeManager {
     this.baseUrl = null
     try {
       this.sseAbort?.abort()
-    } catch { /* noop */ }
+    } catch {
+      /* noop */
+    }
     // Attached servers are owned by someone else (dev script); never kill.
     if (this.attached) {
       this.attached = false
@@ -1216,12 +2153,19 @@ export class OpencodeManager {
     }
     if (this.spawnedViaShell && process.platform === 'win32' && this.child?.pid) {
       try {
-        spawn('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      } catch { /* noop */ }
+        spawn('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true
+        })
+      } catch {
+        /* noop */
+      }
     }
     try {
       this.child?.kill()
-    } catch { /* noop */ }
+    } catch {
+      /* noop */
+    }
     this.child = null
   }
 }

@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const DEFAULT_MODEL = { providerID: 'opencode', modelID: 'muse-spark-1.3-contributor-free' }
-// Measured Sep 2026 ("reply ok" turn): ~350ms to first token vs ~1000ms for
-// big-pickle. Free-tier speeds drift, so this is a hint, not a ranking.
-export const FAST_MODELS = new Set([
-  'opencode/muse-spark-1.3-contributor-free',
-  'opencode/mimo-v2.5-free',
-  'openrouter/cohere/north-mini-code:free'
-])
+// Model labels come straight from the opencode catalog (def.name) —
+// no local renaming or speed annotations.
 export const modelKey = (m) => `${m.providerID}/${m.modelID}`
 
 // OpenCode backend state: server status, free-model catalog, selected model,

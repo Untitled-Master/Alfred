@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, Copy, FileCode2 } from 'lucide-react'
 
 /* ─────────────────────────────────────────────────────────
@@ -68,11 +68,18 @@ export default function CodeBlock({
   /** when the listing exceeds this many lines, show a preview with an
    *  expand toggle instead of the full text (used for tool-write output) */
   previewLines,
+  /** lock the panel to the diff view (git diffs) — hides the Code toggle */
+  hideToggle = false,
   onCopy
 }) {
   const resolvedLines = lines ?? (code != null ? String(code).split('\n') : [])
-  const [view, setView] = useState(variant)
-  const isDiff = view === 'Diff' && Array.isArray(diff) && diff.length > 0
+  const [view, setView] = useState(hideToggle ? 'Diff' : variant)
+  // Follow the requested view (e.g. a streaming edit gains its diff rows
+  // once the args complete); manual toggles still win between changes.
+  useEffect(() => {
+    setView(variant)
+  }, [variant])
+  const isDiff = (hideToggle || view === 'Diff') && Array.isArray(diff) && diff.length > 0
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const raw = code ?? resolvedLines.join('\n')
@@ -99,7 +106,7 @@ export default function CodeBlock({
           <FileCode2 size={14} />
           <span className="cb-name">{filename || lang || 'code'}</span>
         </span>
-        {canDiff && (
+        {canDiff && !hideToggle && (
           <span className="seg cb-toggle">
             {['Code', 'Diff'].map((v) => (
               <button key={v} className={`seg-btn${view === v ? ' on' : ''}`} onClick={() => setView(v)}>

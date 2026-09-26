@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Minus, PanelLeft, PanelRight, Plus, Box, Square, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, GitBranch, Minus, PanelLeft, Box, Square, X } from 'lucide-react'
 
 const send = (ch) => {
   if (window.api?.window) {
@@ -41,19 +41,17 @@ export function HeroChrome({ onTogglePanel }) {
   )
 }
 
-export default function Navbar({ view, setView, sideOpen, onTogglePanel, sessionLabel, modeLabel, onNew }) {
-  const tabs = [
-    { id: 'study', label: 'Study' },
-    { id: 'quiz', label: 'Quiz' }
-  ]
-
+export default function Navbar({ onTogglePanel, onToggleGit, gitOpen, sessionLabel, modeLabel, newMenu }) {
   return (
     <header className="navbar">
       <div className="nav-left">
-        <button className="nbtn" onClick={onTogglePanel} title="Toggle sidebar"><PanelLeft {...I} /></button>
+        <button className="nbtn" onClick={onTogglePanel} title="Toggle sidebar (Ctrl+B)"><PanelLeft {...I} /></button>
         <button className="nbtn dim" title="Back"><ArrowLeft {...I} /></button>
         <button className="nbtn dim" title="Forward"><ArrowRight {...I} /></button>
-        <button className="nbtn" onClick={onNew} title="New session"><Plus {...I} /></button>
+        {newMenu}
+      </div>
+
+      <div className="nav-center">
         <span className="proj-chip" title="Active session">
           <Box size={13} strokeWidth={1.8} className="proj-ico" />
           <strong>{sessionLabel || 'alfred'}</strong>
@@ -61,17 +59,9 @@ export default function Navbar({ view, setView, sideOpen, onTogglePanel, session
         </span>
       </div>
 
-      <nav className="nav-tabs">
-        {tabs.map((t) => (
-          <button key={t.id} className={`nav-tab ${view === t.id ? 'on' : ''}`} onClick={() => setView(t.id)}>
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
       <div className="nav-right">
-        <span className="mode-chip" title="Active mode — switch in Settings → Modes, or with /mode">{modeLabel || 'Study tutor'}</span>
-        <button className="nbtn" onClick={onTogglePanel} title="Toggle panel"><PanelRight {...I} /></button>
+        <span className="mode-chip" title="Active mode — switch in Settings → Modes, or with /mode">{modeLabel || 'Opencode'}</span>
+        <button className={`nbtn${gitOpen ? ' on' : ''}`} onClick={onToggleGit} title="Toggle git panel (Ctrl+G)"><GitBranch {...I} /></button>
         <WinControls />
       </div>
     </header>
