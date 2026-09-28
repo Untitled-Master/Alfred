@@ -8,6 +8,7 @@ import {
   FileText,
   Folder,
   GitBranch,
+  Loader2,
   MessagesSquare,
   Monitor,
   Music,
@@ -349,6 +350,38 @@ function WorkspacePicker({
             hint: 'Pick a folder as workspace'
           }
         ]}
+      />
+    </span>
+  )
+}
+
+// Branch chip next to the workspace picker (under the composer input):
+// same blended icon + Dropdown look, switches branches via gitCheckout.
+function BranchPicker({ branch, branches, switching, onSwitch, direction = 'up', align = 'left' }) {
+  const usable = branch && branch !== '—' && branch !== 'no repo'
+  const list = [...new Set([...(branches || []), ...(usable ? [branch] : [])])]
+  if (!list.length) {
+    return (
+      <span className="ctx-item" title="No git branches">
+        <GitBranch size={12} /> {branch || '—'}
+      </span>
+    )
+  }
+  return (
+    <span className="ws-pick" title={usable ? `Switch branch (now: ${branch})` : 'Switch branch'}>
+      {switching ? (
+        <Loader2 size={12} className="spin ws-pick-ico" />
+      ) : (
+        <GitBranch size={12} className="ws-pick-ico" />
+      )}
+      <Dropdown
+        className="ws-dd"
+        align={align}
+        direction={direction}
+        searchPlaceholder={list.length > 5 ? 'Search branches…' : ''}
+        value={branch}
+        onChange={onSwitch}
+        options={[{ header: 'Branches' }, ...list.map((b) => ({ value: b, label: b }))]}
       />
     </span>
   )
@@ -1136,7 +1169,7 @@ function ThreadPane(props) {
     thinkPicker,
     wsPicker,
     connEl,
-    gitBranch,
+    branchPicker,
     qReq,
     answerQuestion,
     onPreview,
@@ -1313,9 +1346,7 @@ function ThreadPane(props) {
           </div>
           <div className="ctx-row">
             {wsPicker}
-            <span className="ctx-item">
-              <GitBranch size={12} /> {gitBranch}
-            </span>
+            {branchPicker}
             {connEl}
             <span className="ctx-right" title={ctxTitle}>
               ◔ {ctxLabel}
@@ -2406,6 +2437,33 @@ export default function App() {
     (activeGitInfo && !activeGitInfo.repo ? 'no repo' : null) ||
     (activeDir === effDir ? ocStatus.gitBranch : null) ||
     '—'
+  const activeBranches = activeGitInfo?.repo ? activeGitInfo.branches || [] : []
+  // Branch switching from the composer chip (under the input, next to the
+  // workspace picker). Refreshes git state so panel + chips follow.
+  const [branchSwitching, setBranchSwitching] = useState(false)
+  const switchBranch = useCallback(
+    async (name) => {
+      if (!name || name === activeBranch || branchSwitching || !activeDir) return
+      const checkout = window.api?.opencode?.gitCheckout
+      if (typeof checkout !== 'function') {
+        setSideError(
+          'Branch switching needs a fresh app shell — press Ctrl+R, or restart `npm run dev`.'
+        )
+        return
+      }
+      setBranchSwitching(true)
+      setSideError('')
+      try {
+        await checkout(name, false, activeDir)
+        refreshGit(activeDir)
+      } catch (e) {
+        setSideError(`Could not switch branch: ${e.message || e}`)
+      } finally {
+        setBranchSwitching(false)
+      }
+    },
+    [activeBranch, activeDir, branchSwitching, refreshGit]
+  )
   // Per-thread tint: right-clicking a workspace group stores its header color
   // (background wash + folder icon). Purely cosmetic, never touches the theme.
   const [wsColors, setWsColors] = useState(() => {
@@ -2731,6 +2789,16 @@ export default function App() {
   )
   // One pane's worth of props; the composer instance is wired by the caller
   // (mainC for the primary pane, splitC for the split pane).
+  const branchPickerThread = (
+    <BranchPicker
+      branch={activeBranch}
+      branches={activeBranches}
+      switching={branchSwitching}
+      onSwitch={switchBranch}
+      direction="up"
+      align="left"
+    />
+  )
   const paneProps = (sid, session, msgs, composer) => ({
     sid,
     session,
@@ -2747,7 +2815,7 @@ export default function App() {
     thinkPicker,
     wsPicker: wsPickerThread,
     connEl,
-    gitBranch: activeBranch,
+    branchPicker: branchPickerThread,
     qReq,
     answerQuestion,
     onPreview: setPreview,
@@ -3144,9 +3212,14 @@ export default function App() {
                         onBrowse={pickWorkspace}
                         title={activeDir ? `${folderName} checkout` : 'Choose workspace folder'}
                       />
-                      <span className="ctx-item">
-                        <GitBranch size={12} /> {activeBranch} <ChevronDown size={11} />
-                      </span>
+                      <BranchPicker
+                        branch={activeBranch}
+                        branches={activeBranches}
+                        switching={branchSwitching}
+                        onSwitch={switchBranch}
+                        direction="down"
+                        align="left"
+                      />
                     </div>
                   </div>
                 </div>
